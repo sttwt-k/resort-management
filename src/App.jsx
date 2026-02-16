@@ -1218,7 +1218,7 @@ export default function App() {
 
             {/* Staff Floating Action Bar - Center Bottom */}
             {role === 'staff' && selectedStaffRooms.length > 0 && (
-                <div className="fixed bottom-6 left-1/2 transform -translate-x-1/2 w-[90%] md:w-auto bg-white/95 backdrop-blur-xl p-3 rounded-[2rem] shadow-2xl border border-slate-100 flex items-center justify-between gap-3 z-50 animate-slide-up ring-4 ring-slate-100">
+                <div className="fixed bottom-8 left-1/2 transform -translate-x-1/2 w-[90%] md:w-auto bg-white/95 backdrop-blur-xl p-3 rounded-[2rem] shadow-2xl border border-slate-100 flex items-center justify-between gap-3 z-[100] animate-slide-up ring-4 ring-slate-100/50">
                     <div className="pl-4 font-black text-slate-700 whitespace-nowrap text-lg flex flex-col leading-tight">
                         <span>เลือก</span>
                         <span className="text-emerald-600">{selectedStaffRooms.length} ห้อง</span>
@@ -1513,13 +1513,18 @@ export default function App() {
                         </div>
 
                         {staffCheckInForm.isReceiptNeeded && (
-                            <div className="flex gap-2 items-center">
-                                <label className="flex-1 bg-slate-100 text-slate-500 p-3 rounded-xl text-center cursor-pointer hover:bg-slate-200 transition-colors border border-slate-200">
+                            <div className="flex gap-2 items-center flex-col">
+                                <label className="w-full bg-slate-100 text-slate-500 p-3 rounded-xl text-center cursor-pointer hover:bg-slate-200 transition-colors border border-slate-200">
                                     <input type="file" accept="image/*" capture="environment" className="hidden" onChange={(e) => setStaffCheckInForm({...staffCheckInForm, billPhoto: e.target.files[0]})} />
                                     <div className="flex items-center justify-center gap-2 font-bold text-sm">
-                                        <Camera size={18}/> {staffCheckInForm.billPhoto ? 'ถ่ายรูปเรียบร้อย' : 'ถ่ายรูปบิล'}
+                                        <Camera size={18}/> {staffCheckInForm.billPhoto ? 'ถ่ายใหม่' : 'ถ่ายรูปบิล'}
                                     </div>
                                 </label>
+                                {staffCheckInForm.billPhoto && (
+                                    <div className="w-full rounded-xl overflow-hidden border border-slate-200 shadow-sm mt-2">
+                                        <img src={URL.createObjectURL(staffCheckInForm.billPhoto)} alt="Bill Preview" className="w-full h-auto object-cover max-h-48" />
+                                    </div>
+                                )}
                             </div>
                         )}
                   </div>
@@ -1607,7 +1612,7 @@ export default function App() {
                 </div>
 
                 {staffCheckInForm.isReceiptNeeded && (
-                    <div className="animate-fade-in">
+                    <div className="animate-fade-in flex flex-col items-center">
                         <label className="block w-full bg-white border-2 border-dashed border-slate-300 p-4 rounded-xl text-center cursor-pointer hover:border-emerald-400 hover:bg-emerald-50 transition-all">
                             <input type="file" accept="image/*" capture="environment" className="hidden" onChange={(e) => setStaffCheckInForm({...staffCheckInForm, billPhoto: e.target.files[0]})} />
                             <div className="flex flex-col items-center justify-center gap-2 text-slate-500">
@@ -1615,6 +1620,11 @@ export default function App() {
                                 <span className="font-bold text-sm">{staffCheckInForm.billPhoto ? 'ถ่ายรูปเรียบร้อย (กดเพื่อถ่ายใหม่)' : 'แตะเพื่อถ่ายรูปบิล'}</span>
                             </div>
                         </label>
+                        {staffCheckInForm.billPhoto && (
+                            <div className="w-full rounded-xl overflow-hidden border border-slate-200 shadow-sm mt-3">
+                                <img src={URL.createObjectURL(staffCheckInForm.billPhoto)} alt="Bill Preview" className="w-full h-auto object-cover max-h-48" />
+                            </div>
+                        )}
                     </div>
                 )}
               </div>
@@ -1895,7 +1905,10 @@ export default function App() {
                         </div>
                         <div className="bg-emerald-50/50 p-5 border-t border-emerald-100">
                             <div className="flex justify-between items-center mb-3"><label className="text-sm font-bold text-emerald-800">รับเงินเพิ่มครั้งนี้</label><div className="flex gap-1"><button onClick={() => setFormData({...formData, currentPayment: fin.remainingToCollect})} className="text-[10px] bg-white border border-emerald-200 text-emerald-600 px-2 py-1 rounded hover:bg-emerald-50 font-bold">จ่ายเต็ม</button><button onClick={() => setFormData({...formData, currentPayment: 0})} className="text-[10px] bg-white border border-slate-200 text-slate-600 px-2 py-1 rounded hover:bg-slate-50">0</button></div></div>
-                            <div className="flex gap-2"><input type="number" className="flex-1 p-3 rounded-xl border border-emerald-200 text-right font-bold text-xl text-emerald-700 focus:ring-2 focus:ring-emerald-500 outline-none shadow-sm" value={formData.currentPayment} onChange={e => setFormData({...formData, currentPayment: e.target.value})} placeholder="0" /><button onClick={handleCheckInSave} className="bg-emerald-600 text-white px-5 rounded-xl font-bold shadow-lg shadow-emerald-200 hover:bg-emerald-700 transition-all flex items-center gap-1 active:scale-95"><Coins size={18}/> รับเงิน</button></div>
+                            <div className="flex flex-col gap-3">
+                                <input type="number" className="w-full p-3 rounded-xl border border-emerald-200 text-right font-bold text-xl text-emerald-700 focus:ring-2 focus:ring-emerald-500 outline-none shadow-sm mb-2" value={formData.currentPayment} onChange={e => setFormData({...formData, currentPayment: e.target.value})} placeholder="0" />
+                                <button onClick={handleCheckInSave} className="w-full bg-emerald-600 text-white px-5 py-3 rounded-xl font-bold shadow-lg shadow-emerald-200 hover:bg-emerald-700 transition-all flex justify-center items-center gap-2 active:scale-95"><Coins size={20}/> รับเงินเพิ่ม</button>
+                            </div>
                             {remainingAfterCurrentPay > 0 && <p className="text-xs text-orange-500 text-right mt-2 font-bold">* จะเหลือค้างอีก {remainingAfterCurrentPay.toLocaleString()} บาท</p>}
                         </div>
                     </div>
