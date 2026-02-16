@@ -137,6 +137,33 @@ const calculateAge = (dob) => {
     return age;
 };
 
+// Image Compression for Firestore (Base64)
+const compressImage = (file) => {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.readAsDataURL(file);
+        reader.onload = (event) => {
+            const img = new Image();
+            img.src = event.target.result;
+            img.onload = () => {
+                const canvas = document.createElement('canvas');
+                const maxWidth = 800;
+                const scale = maxWidth / img.width;
+                canvas.width = maxWidth;
+                canvas.height = img.height * scale;
+                
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                
+                // Compress to JPEG with 0.7 quality
+                resolve(canvas.toDataURL('image/jpeg', 0.7));
+            };
+            img.onerror = (err) => reject(err);
+        };
+        reader.onerror = (err) => reject(err);
+    });
+};
+
 const exportToCSV = (data, filename) => {
     if (!data || !data.length) return;
     const headers = Object.keys(data[0]);
@@ -335,7 +362,7 @@ export default function App() {
     extraBedPrice: 0, totalPaid: 0, paymentMethod: 'เงินสด',
     selectedAdditionalRooms: [], groupCheckInRooms: [],
     currentPayment: 0,
-    licensePlate: '', idCard: '', lineId: '', dob: '' 
+    licensePlate: '', idCard: '', lineId: '', dob: '', billPhoto: null
   };
   const [formData, setFormData] = useState(initialBookingForm);
 
@@ -556,7 +583,7 @@ export default function App() {
             keyDeposit: booking.keyDeposit ? Number(booking.keyDeposit) : (100 * allGroupIds.length),
             selectedAdditionalRooms: [], groupCheckInRooms: allGroupIds,
             currentPayment: 0,
-            licensePlate: booking.licensePlate || '', idCard: booking.idCard || '', lineId: booking.lineId || '', dob: booking.dob || ''
+            licensePlate: booking.licensePlate || '', idCard: booking.idCard || '', lineId: booking.lineId || '', dob: booking.dob || '', billPhoto: booking.billPhoto || null
           });
           if (status === 'booked') setIsBookingModalOpen(true);
           else setIsCheckInModalOpen(true);
@@ -615,24 +642,27 @@ export default function App() {
       const checkoutDate = formatDate(nextDay);
       const checkInDocNo = generateSequentialDocNo('RC', selectedDate, bookings);
       
+      // Process Image
+      let billPhotoString = null;
+      if (staffCheckInForm.billPhoto) {
+          try {
+              billPhotoString = await compressImage(staffCheckInForm.billPhoto);
+          } catch (e) { console.error("Error compressing image", e); }
+      }
+
       try {
           if (isBookedRoom && selectedBookedRoom) {
               // Handle Single Booked Room Check-in
               const { booking } = selectedBookedRoom;
-              // Calculate payments
-              // Total Price from form (if editable) or derived
-              // Here we trust the calculation logic: Total - Deposit = Remaining
-              // If Key Deposit collected, it's +100
-              // Update the booking
               await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', booking.id), {
                   status: 'occupied',
                   checkInTime: Timestamp.now(),
                   checkInDocNo: checkInDocNo,
-                  keyDeposit: staffCheckInForm.keyDepositCollected ? 100 : 0, // Record if we collected it
-                  totalPaid: (booking.totalPrice - booking.deposit) + (staffCheckInForm.keyDepositCollected ? 100 : 0), // Simple math assumption
+                  keyDeposit: staffCheckInForm.keyDepositCollected ? 100 : 0, 
+                  totalPaid: (booking.totalPrice - booking.deposit) + (staffCheckInForm.keyDepositCollected ? 100 : 0), 
                   paymentMethod: staffCheckInForm.paymentMethod,
                   isReceiptRequested: staffCheckInForm.isReceiptNeeded,
-                  billPhoto: staffCheckInForm.billPhoto ? 'captured' : null // In real app store URL
+                  billPhoto: billPhotoString
               });
               setIsStaffBookingModalOpen(false);
               showNotification('เช็คอินลูกค้าจอง เรียบร้อยแล้ว');
@@ -654,7 +684,7 @@ export default function App() {
                       extraBedPrice: 0,
                       paymentMethod: staffCheckInForm.paymentMethod,
                       isReceiptRequested: staffCheckInForm.isReceiptNeeded,
-                      billPhoto: staffCheckInForm.billPhoto ? 'captured' : null,
+                      billPhoto: billPhotoString,
                       status: 'occupied',
                       docNo: generateSequentialDocNo('BK', selectedDate, bookings),
                       checkInDocNo: checkInDocNo,
@@ -963,6 +993,33 @@ export default function App() {
     } catch (e) {}
   };
   const handleDeleteExpense = async () => { if(confirm('ลบ?')) { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'expenses', expenseForm.id)); setIsExpenseModalOpen(false); } };
+
+  // Image Compression
+  const compressImage = (file) => {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.readAsDataURL(file);
+        reader.onload = (event) => {
+            const img = new Image();
+            img.src = event.target.result;
+            img.onload = () => {
+                const canvas = document.createElement('canvas');
+                const maxWidth = 800;
+                const scale = maxWidth / img.width;
+                canvas.width = maxWidth;
+                canvas.height = img.height * scale;
+                
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                
+                // Compress to JPEG with 0.7 quality
+                resolve(canvas.toDataURL('image/jpeg', 0.7));
+            };
+            img.onerror = (err) => reject(err);
+        };
+        reader.onerror = (err) => reject(err);
+    });
+};
 
   // Report Logic
   const reportData = useMemo(() => {
@@ -1866,6 +1923,14 @@ export default function App() {
                             <div className="flex justify-between pt-2 border-t px-2"><span>สถานะ:</span><span className={`font-bold px-3 py-0.5 rounded-full text-xs ${bookings.find(b=>b.id===formData.id)?.status === 'occupied' ? 'bg-blue-100 text-blue-600' : 'bg-yellow-100 text-yellow-600'}`}>{bookings.find(b=>b.id===formData.id)?.status === 'occupied' ? 'เข้าพักแล้ว' : 'จองแล้ว'}</span></div>
                         </div>
                     </div>
+                    {formData.billPhoto && (
+                        <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm">
+                            <h3 className="font-bold text-slate-700 mb-3 flex items-center gap-2 text-sm uppercase tracking-wide"><ImageIcon className="text-emerald-500" size={16}/> หลักฐานการโอน / บิล</h3>
+                            <div className="rounded-xl overflow-hidden border border-slate-200">
+                                <img src={formData.billPhoto} alt="Bill Evidence" className="w-full h-auto object-cover max-h-64" />
+                            </div>
+                        </div>
+                    )}
                     {formData.groupCheckInRooms.length > 1 && (
                         <div className="bg-blue-50/50 border border-blue-100 rounded-2xl p-5 shadow-sm">
                             <h3 className="font-bold text-blue-800 mb-3 flex items-center gap-2 text-sm"><Layers size={16}/> ห้องในกลุ่ม ({formData.groupCheckInRooms.length})</h3>
@@ -1906,8 +1971,8 @@ export default function App() {
                         <div className="bg-emerald-50/50 p-5 border-t border-emerald-100">
                             <div className="flex justify-between items-center mb-3"><label className="text-sm font-bold text-emerald-800">รับเงินเพิ่มครั้งนี้</label><div className="flex gap-1"><button onClick={() => setFormData({...formData, currentPayment: fin.remainingToCollect})} className="text-[10px] bg-white border border-emerald-200 text-emerald-600 px-2 py-1 rounded hover:bg-emerald-50 font-bold">จ่ายเต็ม</button><button onClick={() => setFormData({...formData, currentPayment: 0})} className="text-[10px] bg-white border border-slate-200 text-slate-600 px-2 py-1 rounded hover:bg-slate-50">0</button></div></div>
                             <div className="flex flex-col gap-3">
-                                <input type="number" className="w-full p-3 rounded-xl border border-emerald-200 text-right font-bold text-xl text-emerald-700 focus:ring-2 focus:ring-emerald-500 outline-none shadow-sm mb-2" value={formData.currentPayment} onChange={e => setFormData({...formData, currentPayment: e.target.value})} placeholder="0" />
-                                <button onClick={handleCheckInSave} className="w-full bg-emerald-600 text-white px-5 py-3 rounded-xl font-bold shadow-lg shadow-emerald-200 hover:bg-emerald-700 transition-all flex justify-center items-center gap-2 active:scale-95"><Coins size={20}/> รับเงินเพิ่ม</button>
+                                <input type="number" className="w-full p-3 rounded-xl border border-emerald-200 text-right font-bold text-xl text-emerald-700 focus:ring-2 focus:ring-emerald-500 outline-none shadow-sm mb-2 bg-white" value={formData.currentPayment} onChange={e => setFormData({...formData, currentPayment: e.target.value})} placeholder="0" />
+                                <button onClick={handleCheckInSave} className="w-full bg-emerald-600 text-white px-5 py-3 rounded-xl font-bold shadow-lg shadow-emerald-200 hover:bg-emerald-700 transition-all flex justify-center items-center gap-2 active:scale-95"><Coins size={20}/> บันทึกรับเงิน</button>
                             </div>
                             {remainingAfterCurrentPay > 0 && <p className="text-xs text-orange-500 text-right mt-2 font-bold">* จะเหลือค้างอีก {remainingAfterCurrentPay.toLocaleString()} บาท</p>}
                         </div>
