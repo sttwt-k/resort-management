@@ -185,7 +185,21 @@ const generateBookingSummary = (customerName, roomNames, checkInDate, nights, de
     return `ยืนยันการจองห้องพัก "จันผารีสอร์ท" 🌿\n\n👤 คุณ: ${customerName}\n🏠 ห้อง: ${roomNames}\n📅 เข้าพัก: ${checkInDate} (${nights} คืน)\n💰 ยอดมัดจำ: ${Number(deposit).toLocaleString()} บาท\n🔖 เลขที่จอง: ${docNo}\n\n📌 เงื่อนไขการจอง:\nหากต้องการยกเลิกการจอง ต้องแจ้งล่วงหน้าอย่างน้อย 5 วัน เพื่อรับเงินคืนเต็มจำนวน (100%) หากแจ้งช้ากว่ากำหนด ขอสงวนสิทธิ์ในการคืนเงินมัดจำครับ`;
 };
 
-// --- Components ---
+// --- Custom Components ---
+const CustomRevenueTooltip = ({ active, payload, label }) => {
+    if (active && payload && payload.length) {
+        const data = payload[0].payload;
+        return (
+            <div className="bg-white p-3 border border-slate-100 rounded-xl shadow-xl text-sm">
+                <p className="font-bold text-slate-800 mb-1">{data.name}</p>
+                <p className="text-emerald-600 font-bold">รายได้: {data.value.toLocaleString()} ฿</p>
+                <p className="text-slate-500 text-xs">จำนวน: {data.totalNights} คืน</p>
+            </div>
+        );
+    }
+    return null;
+};
+
 const Modal = ({ title, isOpen, onClose, children, maxWidth = "max-w-lg" }) => {
   if (!isOpen) return null;
   return (
@@ -233,18 +247,17 @@ const LoginScreen = ({ onLogin }) => {
                     {!showOwnerInput && (
                         <button 
                             onClick={() => onLogin('staff')} 
-                            className="w-full py-4 bg-white border-2 border-slate-100 hover:border-emerald-400 hover:bg-emerald-50/50 text-slate-600 rounded-2xl transition-all duration-300 flex items-center justify-between px-6 group shadow-sm hover:shadow-lg"
+                            className="w-full py-4 bg-cyan-500 hover:bg-cyan-600 text-white rounded-2xl transition-all duration-300 flex items-center justify-between px-6 group shadow-lg shadow-cyan-200 hover:shadow-xl hover:-translate-y-1"
                         >
                             <div className="flex items-center gap-4">
-                                <div className="p-3 bg-slate-100 text-slate-500 rounded-xl group-hover:bg-emerald-500 group-hover:text-white transition-colors">
+                                <div className="p-2 bg-white/20 rounded-xl">
                                     <User size={24}/>
                                 </div>
                                 <div className="text-left">
-                                    <p className="font-bold text-lg text-slate-700 group-hover:text-emerald-800">ทีมงานทั่วไป</p>
-                                    <p className="text-xs text-slate-400">สำหรับคุณแม่ / พนักงาน</p>
+                                    <p className="font-bold text-xl">1. ใช้งานแบบง่าย</p>
                                 </div>
                             </div>
-                            <ArrowRight size={20} className="text-slate-300 group-hover:text-emerald-500 group-hover:translate-x-1 transition-all"/>
+                            <ArrowRight size={24} className="text-white/70 group-hover:text-white group-hover:translate-x-1 transition-all"/>
                         </button>
                     )}
 
@@ -252,18 +265,17 @@ const LoginScreen = ({ onLogin }) => {
                         {!showOwnerInput ? (
                             <button 
                                 onClick={() => setShowOwnerInput(true)} 
-                                className="w-full py-4 bg-white border-2 border-slate-100 hover:border-slate-800 text-slate-600 rounded-2xl transition-all duration-300 flex items-center justify-between px-6 group shadow-sm hover:shadow-lg"
+                                className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl transition-all duration-300 flex items-center justify-between px-6 group shadow-lg shadow-indigo-200 hover:shadow-xl hover:-translate-y-1"
                             >
                                 <div className="flex items-center gap-4">
-                                    <div className="p-3 bg-slate-100 text-slate-500 rounded-xl group-hover:bg-slate-800 group-hover:text-white transition-colors">
+                                    <div className="p-2 bg-white/20 rounded-xl">
                                         <Lock size={24}/>
                                     </div>
                                     <div className="text-left">
-                                        <p className="font-bold text-lg text-slate-700 group-hover:text-slate-900">เจ้าของกิจการ</p>
-                                        <p className="text-xs text-slate-400">เข้าถึงรายงานและตั้งค่า</p>
+                                        <p className="font-bold text-xl">ใช้งานเต็มรูปแบบ</p>
                                     </div>
                                 </div>
-                                <ArrowRight size={20} className="text-slate-300 group-hover:text-slate-800 group-hover:translate-x-1 transition-all"/>
+                                <ArrowRight size={24} className="text-white/70 group-hover:text-white group-hover:translate-x-1 transition-all"/>
                             </button>
                         ) : (
                             <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100 animate-fade-in">
@@ -817,11 +829,17 @@ export default function App() {
       if (!formData.id) { 
         const depositDocNo = generateSequentialDocNo('BK', formData.checkInDate, bookings);
         const roomsToBook = [selectedRoom.id, ...formData.selectedAdditionalRooms];
+        
+        // Calculate average deposit per room
+        const totalDeposit = Number(formData.deposit) || 0;
+        const depositPerRoom = roomsToBook.length > 0 ? Math.floor(totalDeposit / roomsToBook.length) : 0;
+
         const batchPromises = roomsToBook.map((rId, index) => {
             const rConfig = rooms.find(r => r.id === rId);
             return addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'bookings'), {
                 ...commonData, roomId: rConfig.id, roomName: rConfig.name, roomPrice: rConfig.price,
-                totalPrice: rConfig.price * nights, deposit: index === 0 ? Number(formData.deposit) : 0,
+                totalPrice: rConfig.price * nights, 
+                deposit: depositPerRoom, // Distributed deposit
                 docNo: depositDocNo, checkInDocNo: '', status: 'booked', createdAt: Timestamp.now(),
                 keyDeposit: 0, extraBedPrice: 0, totalPaid: 0, paymentMethod: 'เงินสด'
             });
@@ -994,38 +1012,16 @@ export default function App() {
   };
   const handleDeleteExpense = async () => { if(confirm('ลบ?')) { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'expenses', expenseForm.id)); setIsExpenseModalOpen(false); } };
 
-  // Image Compression
-  const compressImage = (file) => {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.readAsDataURL(file);
-        reader.onload = (event) => {
-            const img = new Image();
-            img.src = event.target.result;
-            img.onload = () => {
-                const canvas = document.createElement('canvas');
-                const maxWidth = 800;
-                const scale = maxWidth / img.width;
-                canvas.width = maxWidth;
-                canvas.height = img.height * scale;
-                
-                const ctx = canvas.getContext('2d');
-                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-                
-                // Compress to JPEG with 0.7 quality
-                resolve(canvas.toDataURL('image/jpeg', 0.7));
-            };
-            img.onerror = (err) => reject(err);
-        };
-        reader.onerror = (err) => reject(err);
-    });
-};
-
   // Report Logic
   const reportData = useMemo(() => {
     const targetMonth = reportMonth;
+    if (!targetMonth) return { monthlyRevenue: 0, monthlyExpense: 0, netProfit: 0, lineData: [], roomPieData: [], expensePieData: [], reportBookings: [], reportExpenses: [] };
+    
     const dailyRevenue = {};
-    const daysInMonth = new Date(Number(targetMonth.split('-')[0]), Number(targetMonth.split('-')[1]), 0).getDate();
+    const year = parseInt(targetMonth.split('-')[0]);
+    const month = parseInt(targetMonth.split('-')[1]);
+    const daysInMonth = new Date(year, month, 0).getDate();
+    
     for (let i = 1; i <= daysInMonth; i++) dailyRevenue[`${targetMonth}-${String(i).padStart(2, '0')}`] = 0;
     let monthlyRevenue = 0, monthlyExpense = 0;
     const roomRevenue = {}, reportBookings = [], reportExpenses = [], expenseCats = {};
@@ -1045,14 +1041,14 @@ export default function App() {
     });
 
     bookings.forEach(b => {
-       if (b.checkInDate.startsWith(targetMonth) && (b.status === 'occupied' || b.status === 'checked-out')) {
+       if (b.checkInDate && b.checkInDate.startsWith(targetMonth) && (b.status === 'occupied' || b.status === 'checked-out')) {
            const revenue = (b.totalPrice || 0) + (b.extraBedPrice || 0);
            roomRevenue[b.roomName] = (roomRevenue[b.roomName] || 0) + revenue;
            reportBookings.push({ Type: 'รายได้', DocNo: b.checkInDocNo || b.docNo, Date: b.checkInDate, Room: b.roomName, Customer: b.guestName, Amount: revenue });
        }
     });
 
-    expenses.forEach(ex => { if(ex.date.startsWith(targetMonth)) { monthlyExpense += ex.amount; reportExpenses.push({ ...ex }); expenseCats[ex.category] = (expenseCats[ex.category] || 0) + ex.amount; }});
+    expenses.forEach(ex => { if(ex.date && ex.date.startsWith(targetMonth)) { monthlyExpense += ex.amount; reportExpenses.push({ ...ex }); expenseCats[ex.category] = (expenseCats[ex.category] || 0) + ex.amount; }});
     
     reportBookings.sort((a, b) => a.Date.localeCompare(b.Date));
     reportExpenses.sort((a, b) => a.date.localeCompare(b.date));
@@ -1186,6 +1182,26 @@ export default function App() {
       <div className="container mx-auto p-3 md:p-6">
         {currentView === 'dashboard' && (
           <div className="space-y-6 animate-fade-in relative">
+            {/* Stats Cards - Show in Staff Mode too */}
+             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 md:gap-6">
+                <div className="bg-white p-5 md:p-6 rounded-3xl shadow-sm border border-slate-200 flex flex-col items-center justify-center relative overflow-hidden group hover:shadow-md transition-shadow">
+                    <p className="text-slate-400 text-xs font-bold uppercase tracking-widest mb-1 z-10">ห้องทั้งหมด</p>
+                    <p className="text-3xl md:text-4xl font-black text-slate-800 z-10">{dashboardStats.total}</p>
+                </div>
+                <div className="bg-white p-5 md:p-6 rounded-3xl shadow-sm border border-emerald-200 flex flex-col items-center justify-center relative overflow-hidden group hover:shadow-md transition-shadow">
+                    <p className="text-emerald-400 text-xs font-bold uppercase tracking-widest mb-1 z-10">ว่างพร้อมขาย</p>
+                    <p className="text-3xl md:text-4xl font-black text-emerald-600 z-10">{dashboardStats.available}</p>
+                </div>
+                <div className="bg-white p-5 md:p-6 rounded-3xl shadow-sm border border-yellow-200 flex flex-col items-center justify-center relative overflow-hidden group hover:shadow-md transition-shadow">
+                    <p className="text-yellow-400 text-xs font-bold uppercase tracking-widest mb-1 z-10">จองวันนี้</p>
+                    <p className="text-3xl md:text-4xl font-black text-yellow-500 z-10">{dashboardStats.booked}</p>
+                </div>
+                <div className="bg-white p-5 md:p-6 rounded-3xl shadow-sm border border-blue-200 flex flex-col items-center justify-center relative overflow-hidden group hover:shadow-md transition-shadow">
+                    <p className="text-blue-400 text-xs font-bold uppercase tracking-widest mb-1 z-10">เข้าพักอยู่</p>
+                    <p className="text-3xl md:text-4xl font-black text-blue-600 z-10">{dashboardStats.occupied}</p>
+                </div>
+            </div>
+
             {/* Controls */}
             <div className="bg-white/80 backdrop-blur rounded-2xl p-2 flex justify-between items-center gap-2 shadow-sm border border-white">
                <div className="flex items-center gap-2 bg-white px-3 py-2 rounded-xl shadow-inner border border-slate-100 flex-1 justify-center">
@@ -1231,17 +1247,22 @@ export default function App() {
 
                 return (
                   <div key={room.id} onClick={() => handleRoomClick(room, status, booking)} className={`relative p-4 md:p-6 rounded-3xl cursor-pointer transition-all h-44 md:h-56 flex flex-col justify-between group select-none ${cardClass}`}>
-                    <div className="flex justify-between items-start">
-                        <span className="font-extrabold text-xl md:text-2xl text-slate-800">{room.name}</span>
-                        <div className={`px-2.5 py-1 rounded-lg text-[10px] md:text-xs font-black tracking-wider uppercase ${statusColor}`}>{statusLabel}</div>
-                    </div>
                     
-                    {/* Staff Selection Checkbox UI */}
+                     {/* Staff Selection Checkbox UI - Top Left */}
                     {role === 'staff' && (
-                        <div className={`absolute top-4 right-4 w-6 h-6 rounded-full border-2 flex items-center justify-center checkbox-wrapper ${isSelected ? 'bg-emerald-500 border-emerald-500 selected' : 'bg-white border-slate-200'}`}>
+                        <div className={`absolute top-4 left-4 w-6 h-6 rounded-full border-2 flex items-center justify-center checkbox-wrapper z-10 ${isSelected ? 'bg-emerald-500 border-emerald-500 selected' : 'bg-white border-slate-200'}`}>
                             {isSelected && <CheckSquare size={14} className="text-white"/>}
                         </div>
                     )}
+
+                    <div className="flex justify-between items-start pl-6">
+                         {/* Name - moved right slightly to avoid checkbox */}
+                        <span className="font-extrabold text-xl md:text-2xl text-slate-800">{room.name}</span>
+                        {/* Status Label - Bottom Right positioned essentially via flex layout but consistent */}
+                    </div>
+                    
+                     <div className={`absolute top-4 right-4 px-2.5 py-1 rounded-lg text-[10px] md:text-xs font-black tracking-wider uppercase ${statusColor}`}>{statusLabel}</div>
+
 
                     <div className="mt-2 flex flex-col items-center justify-center h-full">
                       {status === 'available' || status === 'checked-out' ? (
