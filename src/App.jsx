@@ -73,7 +73,7 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const appId = 'chanpha-resort-v1';
+const appId = 'my-resort-app-v1';
 
 // --- Constants ---
 const DEFAULT_ROOM_SEEDS = [
