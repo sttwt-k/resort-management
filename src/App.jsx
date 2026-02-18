@@ -31,30 +31,33 @@ import {
 } from 'recharts';
 
 // --- Fonts & Styles Injection ---
-const fontStyle = document.createElement('style');
-fontStyle.innerHTML = `
-  @import url('https://fonts.googleapis.com/css2?family=Prompt:ital,wght@0,100;0,200;0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,100;1,200;1,300;1,400;1,500;1,600;1,700;1,800;1,900&display=swap');
-  body { font-family: 'Prompt', sans-serif; background-color: #f1f5f9; }
-  
-  @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-  .animate-fade-in { animation: fadeIn 0.3s ease-out forwards; }
-  
-  @keyframes slideUp { from { transform: translate(-50%, 100%); } to { transform: translate(-50%, 0); } }
-  .animate-slide-up { animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+if (!document.getElementById('custom-font-style')) {
+  const fontStyle = document.createElement('style');
+  fontStyle.id = 'custom-font-style';
+  fontStyle.innerHTML = `
+    @import url('https://fonts.googleapis.com/css2?family=Prompt:ital,wght@0,100;0,200;0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,100;1,200;1,300;1,400;1,500;1,600;1,700;1,800;1,900&display=swap');
+    body { font-family: 'Prompt', sans-serif; background-color: #f1f5f9; }
+    
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    .animate-fade-in { animation: fadeIn 0.3s ease-out forwards; }
+    
+    @keyframes slideUp { from { transform: translate(-50%, 100%); } to { transform: translate(-50%, 0); } }
+    .animate-slide-up { animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
 
-  .glass-panel { background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.5); }
-  
-  .custom-scrollbar::-webkit-scrollbar { width: 4px; height: 4px; }
-  .custom-scrollbar::-webkit-scrollbar-track { background: #f1f1f1; }
-  .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
-  .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+    .glass-panel { background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.5); }
+    
+    .custom-scrollbar::-webkit-scrollbar { width: 4px; height: 4px; }
+    .custom-scrollbar::-webkit-scrollbar-track { background: #f1f1f1; }
+    .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+    .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
 
-  .timeline-grid { display: grid; grid-template-columns: 80px repeat(14, 1fr); }
-  
-  .checkbox-wrapper { transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
-  .checkbox-wrapper.selected { transform: scale(1.1); border-color: #10b981; background-color: #10b981; box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3); }
-`;
-document.head.appendChild(fontStyle);
+    .timeline-grid { display: grid; grid-template-columns: 80px repeat(14, 1fr); }
+    
+    .checkbox-wrapper { transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
+    .checkbox-wrapper.selected { transform: scale(1.1); border-color: #10b981; background-color: #10b981; box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3); }
+  `;
+  document.head.appendChild(fontStyle);
+}
 
 // --- Configuration ---
 const firebaseConfig = {
@@ -70,7 +73,7 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const appId = 'my-resort-app-v1';
+const appId = 'chanpha-resort-v1';
 
 // --- Constants ---
 const DEFAULT_ROOM_SEEDS = [
@@ -185,7 +188,21 @@ const generateBookingSummary = (customerName, roomNames, checkInDate, nights, de
     return `ยืนยันการจองห้องพัก "จันผารีสอร์ท" 🌿\n\n👤 คุณ: ${customerName}\n🏠 ห้อง: ${roomNames}\n📅 เข้าพัก: ${checkInDate} (${nights} คืน)\n💰 ยอดมัดจำ: ${Number(deposit).toLocaleString()} บาท\n🔖 เลขที่จอง: ${docNo}\n\n📌 เงื่อนไขการจอง:\nหากต้องการยกเลิกการจอง ต้องแจ้งล่วงหน้าอย่างน้อย 5 วัน เพื่อรับเงินคืนเต็มจำนวน (100%) หากแจ้งช้ากว่ากำหนด ขอสงวนสิทธิ์ในการคืนเงินมัดจำครับ`;
 };
 
-// --- Components ---
+// --- Custom Components ---
+const CustomRevenueTooltip = ({ active, payload, label }) => {
+    if (active && payload && payload.length) {
+        const data = payload[0].payload;
+        return (
+            <div className="bg-white p-3 border border-slate-100 rounded-xl shadow-xl text-sm">
+                <p className="font-bold text-slate-800 mb-1">{data.name}</p>
+                <p className="text-emerald-600 font-bold">รายได้: {data.value.toLocaleString()} ฿</p>
+                <p className="text-slate-500 text-xs">จำนวน: {data.totalNights} คืน</p>
+            </div>
+        );
+    }
+    return null;
+};
+
 const Modal = ({ title, isOpen, onClose, children, maxWidth = "max-w-lg" }) => {
   if (!isOpen) return null;
   return (
@@ -233,18 +250,17 @@ const LoginScreen = ({ onLogin }) => {
                     {!showOwnerInput && (
                         <button 
                             onClick={() => onLogin('staff')} 
-                            className="w-full py-4 bg-white border-2 border-slate-100 hover:border-emerald-400 hover:bg-emerald-50/50 text-slate-600 rounded-2xl transition-all duration-300 flex items-center justify-between px-6 group shadow-sm hover:shadow-lg"
+                            className="w-full py-4 bg-cyan-500 hover:bg-cyan-600 text-white rounded-2xl transition-all duration-300 flex items-center justify-between px-6 group shadow-lg shadow-cyan-200 hover:shadow-xl hover:-translate-y-1"
                         >
                             <div className="flex items-center gap-4">
-                                <div className="p-3 bg-slate-100 text-slate-500 rounded-xl group-hover:bg-emerald-500 group-hover:text-white transition-colors">
+                                <div className="p-2 bg-white/20 rounded-xl">
                                     <User size={24}/>
                                 </div>
                                 <div className="text-left">
-                                    <p className="font-bold text-lg text-slate-700 group-hover:text-emerald-800">ทีมงานทั่วไป</p>
-                                    <p className="text-xs text-slate-400">สำหรับคุณแม่ / พนักงาน</p>
+                                    <p className="font-bold text-xl">1. ใช้งานแบบง่าย</p>
                                 </div>
                             </div>
-                            <ArrowRight size={20} className="text-slate-300 group-hover:text-emerald-500 group-hover:translate-x-1 transition-all"/>
+                            <ArrowRight size={24} className="text-white/70 group-hover:text-white group-hover:translate-x-1 transition-all"/>
                         </button>
                     )}
 
@@ -252,18 +268,17 @@ const LoginScreen = ({ onLogin }) => {
                         {!showOwnerInput ? (
                             <button 
                                 onClick={() => setShowOwnerInput(true)} 
-                                className="w-full py-4 bg-white border-2 border-slate-100 hover:border-slate-800 text-slate-600 rounded-2xl transition-all duration-300 flex items-center justify-between px-6 group shadow-sm hover:shadow-lg"
+                                className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl transition-all duration-300 flex items-center justify-between px-6 group shadow-lg shadow-indigo-200 hover:shadow-xl hover:-translate-y-1"
                             >
                                 <div className="flex items-center gap-4">
-                                    <div className="p-3 bg-slate-100 text-slate-500 rounded-xl group-hover:bg-slate-800 group-hover:text-white transition-colors">
+                                    <div className="p-2 bg-white/20 rounded-xl">
                                         <Lock size={24}/>
                                     </div>
                                     <div className="text-left">
-                                        <p className="font-bold text-lg text-slate-700 group-hover:text-slate-900">เจ้าของกิจการ</p>
-                                        <p className="text-xs text-slate-400">เข้าถึงรายงานและตั้งค่า</p>
+                                        <p className="font-bold text-xl">ใช้งานเต็มรูปแบบ</p>
                                     </div>
                                 </div>
-                                <ArrowRight size={20} className="text-slate-300 group-hover:text-slate-800 group-hover:translate-x-1 transition-all"/>
+                                <ArrowRight size={24} className="text-white/70 group-hover:text-white group-hover:translate-x-1 transition-all"/>
                             </button>
                         ) : (
                             <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100 animate-fade-in">
@@ -301,6 +316,7 @@ const LoginScreen = ({ onLogin }) => {
 export default function App() {
   const [user, setUser] = useState(null);
   const [role, setRole] = useState(null); 
+  const [useMockData, setUseMockData] = useState(false); // New Flag for Mock Data Mode
 
   const [rooms, setRooms] = useState([]);
   const [bookings, setBookings] = useState([]);
@@ -413,37 +429,108 @@ export default function App() {
 
   // --- Auth & Data ---
   useEffect(() => {
-    const init = async () => { 
-        await signInAnonymously(auth); 
+    let isMounted = true;
+    const initAuth = async () => {
+      try {
+        await signInAnonymously(auth);
+      } catch (error) {
+        if (isMounted) {
+            // Check if it's the specific blocked domain error or just general failure
+            const isBlocked = error.code === 'auth/requests-from-referer-blocked' || error.message.includes('blocked');
+            
+            if (isBlocked) {
+                 console.warn("Firebase Auth blocked in Preview environment. Switching to Demo Mode.");
+            } else {
+                 console.error("Authentication Error:", error);
+            }
+            
+            setUseMockData(true);
+            setUser({ uid: 'mock-user', isAnonymous: true });
+            setLoading(false);
+            
+            // Only show notification once
+            if (!notification) {
+                showNotification('เชื่อมต่อ Firebase ไม่ได้ (ติดสิทธิ์ Domain) - สลับใช้โหมดจำลองข้อมูล', 'error');
+            }
+        }
+      }
     };
-    init();
-    return onAuthStateChanged(auth, setUser);
+    
+    initAuth();
+    
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+        if (isMounted) {
+            if (u) {
+                setUser(u);
+                setUseMockData(false);
+                setLoading(false);
+            }
+        }
+    });
+
+    return () => {
+        isMounted = false;
+        unsubscribe();
+    };
   }, []);
 
   useEffect(() => {
+    if (useMockData) {
+        // Load Mock Data
+        setRooms(DEFAULT_ROOM_SEEDS);
+        setBookings([
+            { id: 'm1', roomId: '1', roomName: 'บ้าน 1', guestName: 'คุณสมชาย (ตัวอย่าง)', checkInDate: formatDate(new Date()), checkOutDate: addDays(formatDate(new Date()), 1), status: 'occupied', totalPrice: 500, deposit: 0, totalPaid: 0 },
+            { id: 'm2', roomId: '3', roomName: 'บ้าน 3', guestName: 'คุณสมหญิง (ตัวอย่าง)', checkInDate: addDays(formatDate(new Date()), 1), checkOutDate: addDays(formatDate(new Date()), 2), status: 'booked', totalPrice: 700, deposit: 300, totalPaid: 0 }
+        ]);
+        setExpenses([
+             { id: 'e1', title: 'ซื้อน้ำดื่ม', amount: 50, category: 'น้ำดื่ม', date: formatDate(new Date()), docNo: 'EX-Mock-001', payee: '7-11', paymentMethod: 'เงินสด' }
+        ]);
+        setLoading(false);
+        return;
+    }
+
     if (!user) return;
+    
+    // Add Error Handling to snapshots to prevent white screen crashes
     const qRooms = query(collection(db, 'artifacts', appId, 'public', 'data', 'rooms'));
-    const unsubRooms = onSnapshot(qRooms, async (snapshot) => {
-        if (snapshot.empty) { 
-            await Promise.all(DEFAULT_ROOM_SEEDS.map(r => setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'rooms', r.id), r))); 
-            setLoading(false); 
-        } 
-        else { 
-            setRooms(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a,b) => a.id.localeCompare(b.id, undefined, { numeric: true }))); 
-            setLoading(false); 
+    const unsubRooms = onSnapshot(qRooms, 
+        async (snapshot) => {
+            if (snapshot.empty) { 
+                await Promise.all(DEFAULT_ROOM_SEEDS.map(r => setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'rooms', r.id), r))); 
+                setLoading(false); 
+            } 
+            else { 
+                setRooms(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a,b) => a.id.localeCompare(b.id, undefined, { numeric: true }))); 
+                setLoading(false); 
+            }
+        },
+        (error) => {
+            console.error("Error fetching rooms:", error);
+            // Fallback if permission denied
+            setUseMockData(true);
+            setLoading(false);
         }
-    });
+    );
+
     const qBookings = query(collection(db, 'artifacts', appId, 'public', 'data', 'bookings'));
-    const unsubBookings = onSnapshot(qBookings, (snapshot) => setBookings(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))));
+    const unsubBookings = onSnapshot(qBookings, 
+        (snapshot) => setBookings(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))),
+        (error) => console.error("Error fetching bookings:", error)
+    );
+
     const qExpenses = query(collection(db, 'artifacts', appId, 'public', 'data', 'expenses'));
-    const unsubExpenses = onSnapshot(qExpenses, (snapshot) => {
-      const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setExpenses(docs);
-      setPayeeHistory([...new Set(docs.map(d => d.payee).filter(Boolean))]);
-      setDynamicCategories([...new Set([...DEFAULT_EXPENSE_CATEGORIES, ...docs.map(d => d.category).filter(Boolean)])]);
-    });
+    const unsubExpenses = onSnapshot(qExpenses, 
+        (snapshot) => {
+            const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            setExpenses(docs);
+            setPayeeHistory([...new Set(docs.map(d => d.payee).filter(Boolean))]);
+            setDynamicCategories([...new Set([...DEFAULT_EXPENSE_CATEGORIES, ...docs.map(d => d.category).filter(Boolean)])]);
+        },
+        (error) => console.error("Error fetching expenses:", error)
+    );
+
     return () => { unsubRooms(); unsubBookings(); unsubExpenses(); };
-  }, [user]);
+  }, [user, useMockData]);
 
   const showNotification = (msg, type = 'success') => { setNotification({ message: msg, type }); setTimeout(() => setNotification(null), 3000); };
 
@@ -615,6 +702,7 @@ export default function App() {
       } else if (actionType === 'checkout') {
           if (!confirm(`ยืนยันคืนห้องจำนวน ${selectedStaffRooms.length} ห้อง?`)) return;
           try {
+              if (useMockData) { showNotification('โหมดตัวอย่าง: คืนห้องสำเร็จ'); setSelectedStaffRooms([]); return; }
               const batchPromises = selectedStaffRooms.map(rId => {
                   const { status, booking } = checkRoomStatus(rId, selectedDate, false);
                   if (status !== 'occupied') return null;
@@ -638,6 +726,8 @@ export default function App() {
   };
 
   const confirmStaffCheckIn = async (isBookedRoom = false) => {
+      if (useMockData) { showNotification('โหมดตัวอย่าง: บันทึกข้อมูลสำเร็จ'); setIsStaffCheckInModalOpen(false); setIsStaffBookingModalOpen(false); setSelectedStaffRooms([]); return; }
+
       const nextDay = new Date(selectedDate); nextDay.setDate(nextDay.getDate() + 1);
       const checkoutDate = formatDate(nextDay);
       const checkInDocNo = generateSequentialDocNo('RC', selectedDate, bookings);
@@ -783,10 +873,12 @@ export default function App() {
   const handleSaveRoom = async (e) => {
       e.preventDefault();
       if(!roomForm.id || !roomForm.name || !roomForm.price) return alert('กรุณากรอกข้อมูลให้ครบ');
+      if (useMockData) { showNotification('โหมดตัวอย่าง: บันทึกห้องพักแล้ว'); setRoomForm({ id: '', name: '', type: '', price: '' }); return; }
       try { await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'rooms', roomForm.id), { ...roomForm, price: Number(roomForm.price) }); showNotification('บันทึกห้องพักแล้ว'); setRoomForm({ id: '', name: '', type: '', price: '' }); } catch(error) { showNotification('เกิดข้อผิดพลาด', 'error'); }
   };
   const handleDeleteRoom = async (rid) => {
       if(!confirm('ยืนยันลบห้องนี้?')) return;
+      if (useMockData) { showNotification('โหมดตัวอย่าง: ลบห้องสำเร็จ'); return; }
       try { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'rooms', rid)); showNotification('ลบห้องพักสำเร็จ'); } catch(e){ showNotification('ลบไม่สำเร็จ', 'error'); }
   };
 
@@ -805,6 +897,12 @@ export default function App() {
         if (!isRoomAvailable(selectedRoom.id, formData.checkInDate, formData.checkOutDate, formData.id)) return alert(`ห้องไม่ว่างในช่วงเวลานี้`);
     }
 
+    if (useMockData) { 
+        showNotification('โหมดตัวอย่าง: บันทึกการจองสำเร็จ'); 
+        setIsBookingModalOpen(false); 
+        return; 
+    }
+
     const nights = calculateNights(formData.checkInDate, formData.checkOutDate);
     const commonData = {
       guestName: formData.guestName, phone: formData.phone, checkInDate: formData.checkInDate, checkOutDate: formData.checkOutDate,
@@ -817,11 +915,17 @@ export default function App() {
       if (!formData.id) { 
         const depositDocNo = generateSequentialDocNo('BK', formData.checkInDate, bookings);
         const roomsToBook = [selectedRoom.id, ...formData.selectedAdditionalRooms];
+        
+        // Calculate average deposit per room
+        const totalDeposit = Number(formData.deposit) || 0;
+        const depositPerRoom = roomsToBook.length > 0 ? Math.floor(totalDeposit / roomsToBook.length) : 0;
+
         const batchPromises = roomsToBook.map((rId, index) => {
             const rConfig = rooms.find(r => r.id === rId);
             return addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'bookings'), {
                 ...commonData, roomId: rConfig.id, roomName: rConfig.name, roomPrice: rConfig.price,
-                totalPrice: rConfig.price * nights, deposit: index === 0 ? Number(formData.deposit) : 0,
+                totalPrice: rConfig.price * nights, 
+                deposit: depositPerRoom, // Distributed deposit
                 docNo: depositDocNo, checkInDocNo: '', status: 'booked', createdAt: Timestamp.now(),
                 keyDeposit: 0, extraBedPrice: 0, totalPaid: 0, paymentMethod: 'เงินสด'
             });
@@ -876,6 +980,8 @@ export default function App() {
 
   const handleCheckInSave = async () => {
      if (!user) return;
+     if (useMockData) { showNotification('โหมดตัวอย่าง: บันทึกข้อมูลสำเร็จ'); setIsCheckInModalOpen(false); return; }
+
      const newRcDocNo = formData.checkInDocNo || generateSequentialDocNo('RC', formatDate(new Date()), bookings);
      const paymentInHand = Number(formData.currentPayment);
      
@@ -926,6 +1032,8 @@ export default function App() {
 
   const handleCheckout = async () => {
      if(!formData.id) return;
+     if (useMockData) { showNotification('โหมดตัวอย่าง: เช็คเอาท์สำเร็จ'); setIsCheckInModalOpen(false); return; }
+     
      const today = formatDate(new Date());
      const originalCheckout = formData.checkOutDate;
      const earlyCheckout = today < originalCheckout && today >= formData.checkInDate;
@@ -953,6 +1061,7 @@ export default function App() {
 
   const handleCheckoutSingle = async (bid, keyDep) => {
      if(!confirm(`ยืนยันเช็คเอาท์ห้องนี้? ${keyDep > 0 ? `(อย่าลืมคืนมัดจำ ${keyDep} บาท)` : ''}`)) return;
+     if (useMockData) { showNotification('โหมดตัวอย่าง: เช็คเอาท์สำเร็จ'); return; }
      try {
         await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', bid), { status: 'checked-out', checkOutTime: Timestamp.now(), keyDepositReturned: true });
         showNotification("เช็คเอาท์เรียบร้อย ✅");
@@ -961,6 +1070,7 @@ export default function App() {
 
   const handleDeleteBooking = async () => {
       if(!confirm('ต้องการยกเลิกการจองนี้หรือไม่?')) return;
+      if (useMockData) { showNotification('โหมดตัวอย่าง: ยกเลิกสำเร็จ'); setIsBookingModalOpen(false); return; }
       try {
           await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', formData.id));
           setIsBookingModalOpen(false); showNotification("ยกเลิกการจองสำเร็จ");
@@ -981,6 +1091,8 @@ export default function App() {
     e.preventDefault(); if (!user) return;
     const finalCategory = expenseForm.category === 'เพิ่มหมวดหมู่ใหม่...' ? expenseForm.customCategory : expenseForm.category;
     if (!finalCategory) return alert('ระบุหมวดหมู่');
+    if (useMockData) { showNotification('โหมดตัวอย่าง: บันทึกรายจ่ายสำเร็จ'); setIsExpenseModalOpen(false); return; }
+
     const payload = { ...expenseForm, amount: Number(expenseForm.amount), category: finalCategory, updatedAt: Timestamp.now(), updatedBy: user.uid };
     delete payload.customCategory; 
     try {
@@ -992,40 +1104,18 @@ export default function App() {
       setIsExpenseModalOpen(false);
     } catch (e) {}
   };
-  const handleDeleteExpense = async () => { if(confirm('ลบ?')) { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'expenses', expenseForm.id)); setIsExpenseModalOpen(false); } };
-
-  // Image Compression
-  const compressImage = (file) => {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.readAsDataURL(file);
-        reader.onload = (event) => {
-            const img = new Image();
-            img.src = event.target.result;
-            img.onload = () => {
-                const canvas = document.createElement('canvas');
-                const maxWidth = 800;
-                const scale = maxWidth / img.width;
-                canvas.width = maxWidth;
-                canvas.height = img.height * scale;
-                
-                const ctx = canvas.getContext('2d');
-                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-                
-                // Compress to JPEG with 0.7 quality
-                resolve(canvas.toDataURL('image/jpeg', 0.7));
-            };
-            img.onerror = (err) => reject(err);
-        };
-        reader.onerror = (err) => reject(err);
-    });
-};
+  const handleDeleteExpense = async () => { if(confirm('ลบ?')) { if(useMockData){ showNotification('ลบสำเร็จ (ตัวอย่าง)'); setIsExpenseModalOpen(false); return;} await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'expenses', expenseForm.id)); setIsExpenseModalOpen(false); } };
 
   // Report Logic
   const reportData = useMemo(() => {
     const targetMonth = reportMonth;
+    if (!targetMonth) return { monthlyRevenue: 0, monthlyExpense: 0, netProfit: 0, lineData: [], roomPieData: [], expensePieData: [], reportBookings: [], reportExpenses: [] };
+    
     const dailyRevenue = {};
-    const daysInMonth = new Date(Number(targetMonth.split('-')[0]), Number(targetMonth.split('-')[1]), 0).getDate();
+    const year = parseInt(targetMonth.split('-')[0]);
+    const month = parseInt(targetMonth.split('-')[1]);
+    const daysInMonth = new Date(year, month, 0).getDate();
+    
     for (let i = 1; i <= daysInMonth; i++) dailyRevenue[`${targetMonth}-${String(i).padStart(2, '0')}`] = 0;
     let monthlyRevenue = 0, monthlyExpense = 0;
     const roomRevenue = {}, reportBookings = [], reportExpenses = [], expenseCats = {};
@@ -1045,14 +1135,14 @@ export default function App() {
     });
 
     bookings.forEach(b => {
-       if (b.checkInDate.startsWith(targetMonth) && (b.status === 'occupied' || b.status === 'checked-out')) {
+       if (b.checkInDate && b.checkInDate.startsWith(targetMonth) && (b.status === 'occupied' || b.status === 'checked-out')) {
            const revenue = (b.totalPrice || 0) + (b.extraBedPrice || 0);
            roomRevenue[b.roomName] = (roomRevenue[b.roomName] || 0) + revenue;
            reportBookings.push({ Type: 'รายได้', DocNo: b.checkInDocNo || b.docNo, Date: b.checkInDate, Room: b.roomName, Customer: b.guestName, Amount: revenue });
        }
     });
 
-    expenses.forEach(ex => { if(ex.date.startsWith(targetMonth)) { monthlyExpense += ex.amount; reportExpenses.push({ ...ex }); expenseCats[ex.category] = (expenseCats[ex.category] || 0) + ex.amount; }});
+    expenses.forEach(ex => { if(ex.date && ex.date.startsWith(targetMonth)) { monthlyExpense += ex.amount; reportExpenses.push({ ...ex }); expenseCats[ex.category] = (expenseCats[ex.category] || 0) + ex.amount; }});
     
     reportBookings.sort((a, b) => a.Date.localeCompare(b.Date));
     reportExpenses.sort((a, b) => a.date.localeCompare(b.date));
@@ -1133,7 +1223,10 @@ export default function App() {
               <div className="bg-gradient-to-tr from-emerald-500 to-teal-400 text-white p-2 rounded-xl font-bold shadow-md shadow-emerald-200">CR</div>
               <div>
                   <h1 className="text-xl font-extrabold tracking-tight">Chanpha Resort</h1>
-                  <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">{role === 'owner' ? 'Owner Mode' : 'Staff Mode'}</span>
+                  <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider flex items-center gap-1">
+                      {role === 'owner' ? 'Owner Mode' : 'Staff Mode'}
+                      {useMockData && <span className="bg-red-100 text-red-600 px-1.5 py-0.5 rounded ml-1 animate-pulse">DEMO MODE</span>}
+                  </span>
               </div>
           </div>
           
@@ -1186,6 +1279,26 @@ export default function App() {
       <div className="container mx-auto p-3 md:p-6">
         {currentView === 'dashboard' && (
           <div className="space-y-6 animate-fade-in relative">
+            {/* Stats Cards - Show in Staff Mode too */}
+             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 md:gap-6">
+                <div className="bg-white p-5 md:p-6 rounded-3xl shadow-sm border border-slate-200 flex flex-col items-center justify-center relative overflow-hidden group hover:shadow-md transition-shadow">
+                    <p className="text-slate-400 text-xs font-bold uppercase tracking-widest mb-1 z-10">ห้องทั้งหมด</p>
+                    <p className="text-3xl md:text-4xl font-black text-slate-800 z-10">{dashboardStats.total}</p>
+                </div>
+                <div className="bg-white p-5 md:p-6 rounded-3xl shadow-sm border border-emerald-200 flex flex-col items-center justify-center relative overflow-hidden group hover:shadow-md transition-shadow">
+                    <p className="text-emerald-400 text-xs font-bold uppercase tracking-widest mb-1 z-10">ว่างพร้อมขาย</p>
+                    <p className="text-3xl md:text-4xl font-black text-emerald-600 z-10">{dashboardStats.available}</p>
+                </div>
+                <div className="bg-white p-5 md:p-6 rounded-3xl shadow-sm border border-yellow-200 flex flex-col items-center justify-center relative overflow-hidden group hover:shadow-md transition-shadow">
+                    <p className="text-yellow-400 text-xs font-bold uppercase tracking-widest mb-1 z-10">จองวันนี้</p>
+                    <p className="text-3xl md:text-4xl font-black text-yellow-500 z-10">{dashboardStats.booked}</p>
+                </div>
+                <div className="bg-white p-5 md:p-6 rounded-3xl shadow-sm border border-blue-200 flex flex-col items-center justify-center relative overflow-hidden group hover:shadow-md transition-shadow">
+                    <p className="text-blue-400 text-xs font-bold uppercase tracking-widest mb-1 z-10">เข้าพักอยู่</p>
+                    <p className="text-3xl md:text-4xl font-black text-blue-600 z-10">{dashboardStats.occupied}</p>
+                </div>
+            </div>
+
             {/* Controls */}
             <div className="bg-white/80 backdrop-blur rounded-2xl p-2 flex justify-between items-center gap-2 shadow-sm border border-white">
                <div className="flex items-center gap-2 bg-white px-3 py-2 rounded-xl shadow-inner border border-slate-100 flex-1 justify-center">
@@ -1231,17 +1344,22 @@ export default function App() {
 
                 return (
                   <div key={room.id} onClick={() => handleRoomClick(room, status, booking)} className={`relative p-4 md:p-6 rounded-3xl cursor-pointer transition-all h-44 md:h-56 flex flex-col justify-between group select-none ${cardClass}`}>
-                    <div className="flex justify-between items-start">
-                        <span className="font-extrabold text-xl md:text-2xl text-slate-800">{room.name}</span>
-                        <div className={`px-2.5 py-1 rounded-lg text-[10px] md:text-xs font-black tracking-wider uppercase ${statusColor}`}>{statusLabel}</div>
-                    </div>
                     
-                    {/* Staff Selection Checkbox UI */}
+                     {/* Staff Selection Checkbox UI - Top Left */}
                     {role === 'staff' && (
-                        <div className={`absolute top-4 right-4 w-6 h-6 rounded-full border-2 flex items-center justify-center checkbox-wrapper ${isSelected ? 'bg-emerald-500 border-emerald-500 selected' : 'bg-white border-slate-200'}`}>
+                        <div className={`absolute top-4 left-4 w-6 h-6 rounded-full border-2 flex items-center justify-center checkbox-wrapper z-10 ${isSelected ? 'bg-emerald-500 border-emerald-500 selected' : 'bg-white border-slate-200'}`}>
                             {isSelected && <CheckSquare size={14} className="text-white"/>}
                         </div>
                     )}
+
+                    <div className="flex justify-between items-start pl-6">
+                         {/* Name - moved right slightly to avoid checkbox */}
+                        <span className="font-extrabold text-xl md:text-2xl text-slate-800">{room.name}</span>
+                        {/* Status Label - Bottom Right positioned essentially via flex layout but consistent */}
+                    </div>
+                    
+                     <div className={`absolute top-4 right-4 px-2.5 py-1 rounded-lg text-[10px] md:text-xs font-black tracking-wider uppercase ${statusColor}`}>{statusLabel}</div>
+
 
                     <div className="mt-2 flex flex-col items-center justify-center h-full">
                       {status === 'available' || status === 'checked-out' ? (
@@ -1900,91 +2018,6 @@ export default function App() {
                 <button onClick={handleBookingSave} className={`py-3 bg-slate-800 text-white rounded-xl font-bold hover:bg-slate-900 flex justify-center items-center gap-2 shadow-lg shadow-slate-300 transition-all transform active:scale-95 ${formData.id ? 'px-8' : 'w-full'}`}><Save size={18}/> {formData.id ? 'บันทึก' : 'ยืนยันการจอง'}</button>
             </div>
         </div>
-      </Modal>
-
-      <Modal isOpen={isCheckInModalOpen} onClose={() => setIsCheckInModalOpen(false)} title={`เช็คอิน / จัดการห้องพัก (${formData.docNo})`} maxWidth="max-w-4xl">
-         <div className="space-y-6 font-sans">
-            <div className="flex flex-col md:flex-row gap-6">
-                <div className="w-full md:w-1/2 space-y-4">
-                    <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm">
-                        <h3 className="font-bold text-slate-700 mb-4 flex items-center gap-2 text-sm uppercase tracking-wide"><FileText className="text-blue-500" size={16}/> รายละเอียดห้องพัก</h3>
-                        <div className="space-y-3 text-sm text-slate-600">
-                            <div className="flex justify-between p-2 bg-slate-50 rounded-lg"><span>ห้องหลัก:</span><span className="font-black text-slate-800 text-lg">{selectedRoom?.name}</span></div>
-                            <div className="flex justify-between items-center px-2"><span>ลูกค้า:</span><span className="font-bold text-slate-800">{formData.guestName}</span></div>
-                             {/* Show Car/ID if exists */}
-                            {(formData.licensePlate || formData.idCard || formData.lineId) && (
-                                <div className="flex flex-wrap gap-2 px-2 text-xs text-slate-500">
-                                    {formData.lineId && <span className="bg-emerald-50 text-emerald-600 px-2 py-1 rounded flex items-center gap-1 font-bold"><MessageCircle size={10}/> {formData.lineId}</span>}
-                                    {formData.licensePlate && <span className="bg-slate-100 px-2 py-1 rounded flex items-center gap-1"><Car size={10}/> {formData.licensePlate}</span>}
-                                    {formData.idCard && <span className="bg-slate-100 px-2 py-1 rounded flex items-center gap-1"><CreditCard size={10}/> {formData.idCard}</span>}
-                                </div>
-                            )}
-                            <div className="flex justify-between items-center px-2"><span>เข้าพัก:</span><span className="font-medium">{formData.checkInDate} ({formData.nights} คืน)</span></div>
-                            <div className="flex justify-between pt-2 border-t px-2"><span>สถานะ:</span><span className={`font-bold px-3 py-0.5 rounded-full text-xs ${bookings.find(b=>b.id===formData.id)?.status === 'occupied' ? 'bg-blue-100 text-blue-600' : 'bg-yellow-100 text-yellow-600'}`}>{bookings.find(b=>b.id===formData.id)?.status === 'occupied' ? 'เข้าพักแล้ว' : 'จองแล้ว'}</span></div>
-                        </div>
-                    </div>
-                    {formData.billPhoto && (
-                        <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm">
-                            <h3 className="font-bold text-slate-700 mb-3 flex items-center gap-2 text-sm uppercase tracking-wide"><ImageIcon className="text-emerald-500" size={16}/> หลักฐานการโอน / บิล</h3>
-                            <div className="rounded-xl overflow-hidden border border-slate-200">
-                                <img src={formData.billPhoto} alt="Bill Evidence" className="w-full h-auto object-cover max-h-64" />
-                            </div>
-                        </div>
-                    )}
-                    {formData.groupCheckInRooms.length > 1 && (
-                        <div className="bg-blue-50/50 border border-blue-100 rounded-2xl p-5 shadow-sm">
-                            <h3 className="font-bold text-blue-800 mb-3 flex items-center gap-2 text-sm"><Layers size={16}/> ห้องในกลุ่ม ({formData.groupCheckInRooms.length})</h3>
-                            <div className="space-y-2 max-h-48 overflow-y-auto pr-1 custom-scrollbar">
-                                {formData.groupCheckInRooms.map(bid => {
-                                    const b = bookings.find(x => x.id === bid);
-                                    if (!b) return null;
-                                    const isOccupied = b.status === 'occupied';
-                                    return (
-                                        <div key={bid} className="flex justify-between items-center bg-white p-3 rounded-xl border border-blue-100 text-sm shadow-sm">
-                                            <span className="font-bold text-slate-700">{b.roomName}</span>
-                                            <div className="flex items-center gap-2">
-                                                <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${isOccupied ? 'bg-blue-100 text-blue-600' : 'bg-yellow-100 text-yellow-600'}`}>{isOccupied ? 'พัก' : 'จอง'}</span>
-                                                {isOccupied && (<button onClick={() => handleCheckoutSingle(b.id, b.keyDeposit)} className="text-[10px] bg-orange-100 text-orange-600 px-2 py-1 rounded border border-orange-200 hover:bg-orange-200">คืนห้อง</button>)}
-                                            </div>
-                                        </div>
-                                    );
-                                })}
-                            </div>
-                        </div>
-                    )}
-                    <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm">
-                        <h3 className="font-bold text-slate-700 mb-3 flex items-center gap-2 text-sm uppercase tracking-wide"><Key className="text-yellow-500" size={16}/> ประกันกุญแจ</h3>
-                        <div className="flex justify-between items-center"><label className="text-sm text-slate-500">ยอดเงินประกัน (คืนตอนออก)</label><div className="flex items-center gap-2"><input type="number" className="w-24 p-2 bg-slate-50 border-0 rounded-lg text-right font-bold text-slate-800" value={formData.keyDeposit} onChange={e => setFormData({...formData, keyDeposit: e.target.value})} /><span className="text-sm text-slate-400">บาท</span></div></div>
-                    </div>
-                </div>
-                <div className="w-full md:w-1/2 space-y-4">
-                    <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
-                        <div className="bg-slate-50 px-5 py-4 border-b border-slate-100 flex justify-between items-center"><h3 className="font-bold text-slate-700 flex items-center gap-2 text-sm uppercase tracking-wide"><CreditCard className="text-emerald-500" size={16}/> สรุปค่าใช้จ่าย</h3>{fin.remainingToCollect <= 0 && <span className="bg-emerald-100 text-emerald-700 text-[10px] px-2 py-1 rounded-full font-bold flex items-center gap-1"><CheckCircle size={10}/> ชำระครบ</span>}</div>
-                        <div className="p-5 space-y-3 text-sm">
-                            <div className="flex justify-between"><span>ค่าห้องพัก ({fin.count || fin.nights} {fin.count ? 'ห้อง' : 'คืน'})</span><span className="font-medium">{fin.grandTotalRoomPrice?.toLocaleString() || fin.roomTotal?.toLocaleString()}</span></div>
-                            <div className="flex justify-between items-center"><span>ค่าบริการเสริม</span><input type="number" className="w-20 bg-slate-50 rounded px-2 py-1 text-right focus:ring-2 focus:ring-emerald-500 outline-none" value={formData.extraBedPrice} onChange={e => setFormData({...formData, extraBedPrice: e.target.value})} /></div>
-                            <div className="flex justify-between text-blue-600 font-medium"><span>+ เงินประกันกุญแจ</span><span>{Number(formData.keyDeposit).toLocaleString()}</span></div>
-                            <div className="flex justify-between text-slate-400 border-b border-slate-100 pb-3 mb-2"><span>ยอดรวมทั้งสิ้น</span><span className="font-bold text-slate-600">{fin.totalBill?.toLocaleString() || fin.grandTotal?.toLocaleString()}</span></div>
-                            <div className="flex justify-between text-emerald-600 font-medium"><span>- ชำระแล้ว (มัดจำ+เดิม)</span><span>-{fin.alreadyPaid?.toLocaleString() || fin.previouslyPaid?.toLocaleString()}</span></div>
-                            <div className="flex justify-between items-center pt-2"><span className="font-bold text-lg text-red-500">ยอดคงเหลือสุทธิ</span><span className="font-black text-2xl text-red-500">{fin.remainingToCollect?.toLocaleString()} ฿</span></div>
-                        </div>
-                        <div className="bg-emerald-50/50 p-5 border-t border-emerald-100">
-                            <div className="flex justify-between items-center mb-3"><label className="text-sm font-bold text-emerald-800">รับเงินเพิ่มครั้งนี้</label><div className="flex gap-1"><button onClick={() => setFormData({...formData, currentPayment: fin.remainingToCollect})} className="text-[10px] bg-white border border-emerald-200 text-emerald-600 px-2 py-1 rounded hover:bg-emerald-50 font-bold">จ่ายเต็ม</button><button onClick={() => setFormData({...formData, currentPayment: 0})} className="text-[10px] bg-white border border-slate-200 text-slate-600 px-2 py-1 rounded hover:bg-slate-50">0</button></div></div>
-                            <div className="flex flex-col gap-3">
-                                <input type="number" className="w-full p-3 rounded-xl border border-emerald-200 text-right font-bold text-xl text-emerald-700 focus:ring-2 focus:ring-emerald-500 outline-none shadow-sm mb-2 bg-white" value={formData.currentPayment} onChange={e => setFormData({...formData, currentPayment: e.target.value})} placeholder="0" />
-                                <button onClick={handleCheckInSave} className="w-full bg-emerald-600 text-white px-5 py-3 rounded-xl font-bold shadow-lg shadow-emerald-200 hover:bg-emerald-700 transition-all flex justify-center items-center gap-2 active:scale-95"><Coins size={20}/> บันทึกรับเงิน</button>
-                            </div>
-                            {remainingAfterCurrentPay > 0 && <p className="text-xs text-orange-500 text-right mt-2 font-bold">* จะเหลือค้างอีก {remainingAfterCurrentPay.toLocaleString()} บาท</p>}
-                        </div>
-                    </div>
-                </div>
-            </div>
-            {(currentBookingStatus === 'occupied' || (!isGroupCheckIn && currentBookingStatus === 'occupied')) && (
-                <div className="flex justify-end pt-4 border-t border-slate-100">
-                    <button onClick={handleCheckout} className="px-8 py-3 bg-orange-500 text-white rounded-xl font-bold shadow-lg hover:bg-orange-600 flex items-center gap-2 transition-all transform active:scale-95"><LogOut size={20}/> เช็คเอาท์ / คืนห้อง</button>
-                </div>
-            )}
-         </div>
       </Modal>
 
       <Modal isOpen={isExpenseModalOpen} onClose={() => setIsExpenseModalOpen(false)} title={expenseModalMode === 'create' ? `บันทึกรายจ่าย` : `แก้ไขรายจ่าย`}>
