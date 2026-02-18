@@ -58,7 +58,7 @@ document.head.appendChild(fontStyle);
 
 // --- Configuration ---
 const firebaseConfig = {
-  apiKey: "AIzaSyCnKJu3yU98-sqiyMayMiwDAKaUUxh-VQg",
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: "chanpha-resort.firebaseapp.com",
   projectId: "chanpha-resort",
   storageBucket: "chanpha-resort.firebasestorage.app",
