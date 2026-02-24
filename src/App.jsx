@@ -3,7 +3,8 @@ import { initializeApp } from 'firebase/app';
 import { 
   getAuth, 
   signInAnonymously, 
-  onAuthStateChanged 
+  onAuthStateChanged,
+  signInWithCustomToken 
 } from 'firebase/auth';
 import { 
   getFirestore, 
@@ -24,7 +25,7 @@ import {
   Settings, Trash2, Lock, Copy, FileText, User, 
   Shield, LogIn, Clock, CreditCard, Coins, ArrowRight, AlertCircle, Search, Car, Menu,
   MessageCircle, Send, LayoutList, ChevronRight, ChevronLeft, Smartphone, Gift, CheckSquare,
-  Receipt, Banknote, QrCode, Image as ImageIcon
+  Receipt, Banknote, QrCode, Image as ImageIcon, Moon
 } from 'lucide-react';
 import { 
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell
@@ -73,7 +74,7 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const appId = 'my-resort-app-v1';
+const appId = 'my-resort-app-v1'; // คืนค่ากลับเป็นของเดิมเพื่อให้ข้อมูลเก่ากลับมา
 
 // --- Constants ---
 const DEFAULT_ROOM_SEEDS = [
@@ -250,17 +251,18 @@ const LoginScreen = ({ onLogin }) => {
                     {!showOwnerInput && (
                         <button 
                             onClick={() => onLogin('staff')} 
-                            className="w-full py-4 bg-cyan-500 hover:bg-cyan-600 text-white rounded-2xl transition-all duration-300 flex items-center justify-between px-6 group shadow-lg shadow-cyan-200 hover:shadow-xl hover:-translate-y-1"
+                            className="w-full py-4 bg-white border-2 border-slate-100 hover:border-emerald-400 hover:bg-emerald-50/50 text-slate-600 rounded-2xl transition-all duration-300 flex items-center justify-between px-6 group shadow-sm hover:shadow-lg"
                         >
                             <div className="flex items-center gap-4">
-                                <div className="p-2 bg-white/20 rounded-xl">
+                                <div className="p-3 bg-slate-100 text-slate-500 rounded-xl group-hover:bg-emerald-500 group-hover:text-white transition-colors">
                                     <User size={24}/>
                                 </div>
                                 <div className="text-left">
-                                    <p className="font-bold text-xl">1. ใช้งานแบบง่าย</p>
+                                    <p className="font-bold text-lg text-slate-700 group-hover:text-emerald-800">ทีมงานทั่วไป</p>
+                                    <p className="text-xs text-slate-400">สำหรับคุณแม่ / พนักงาน</p>
                                 </div>
                             </div>
-                            <ArrowRight size={24} className="text-white/70 group-hover:text-white group-hover:translate-x-1 transition-all"/>
+                            <ArrowRight size={20} className="text-slate-300 group-hover:text-emerald-500 group-hover:translate-x-1 transition-all"/>
                         </button>
                     )}
 
@@ -268,17 +270,18 @@ const LoginScreen = ({ onLogin }) => {
                         {!showOwnerInput ? (
                             <button 
                                 onClick={() => setShowOwnerInput(true)} 
-                                className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl transition-all duration-300 flex items-center justify-between px-6 group shadow-lg shadow-indigo-200 hover:shadow-xl hover:-translate-y-1"
+                                className="w-full py-4 bg-white border-2 border-slate-100 hover:border-slate-800 text-slate-600 rounded-2xl transition-all duration-300 flex items-center justify-between px-6 group shadow-sm hover:shadow-lg"
                             >
                                 <div className="flex items-center gap-4">
-                                    <div className="p-2 bg-white/20 rounded-xl">
+                                    <div className="p-3 bg-slate-100 text-slate-500 rounded-xl group-hover:bg-slate-800 group-hover:text-white transition-colors">
                                         <Lock size={24}/>
                                     </div>
                                     <div className="text-left">
-                                        <p className="font-bold text-xl">ใช้งานเต็มรูปแบบ</p>
+                                        <p className="font-bold text-lg text-slate-700 group-hover:text-slate-900">เจ้าของกิจการ</p>
+                                        <p className="text-xs text-slate-400">เข้าถึงรายงานและตั้งค่า</p>
                                     </div>
                                 </div>
-                                <ArrowRight size={24} className="text-white/70 group-hover:text-white group-hover:translate-x-1 transition-all"/>
+                                <ArrowRight size={20} className="text-slate-300 group-hover:text-slate-800 group-hover:translate-x-1 transition-all"/>
                             </button>
                         ) : (
                             <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100 animate-fade-in">
@@ -316,7 +319,7 @@ const LoginScreen = ({ onLogin }) => {
 export default function App() {
   const [user, setUser] = useState(null);
   const [role, setRole] = useState(null); 
-  const [useMockData, setUseMockData] = useState(false); // New Flag for Mock Data Mode
+  const [useMockData, setUseMockData] = useState(false);
 
   const [rooms, setRooms] = useState([]);
   const [bookings, setBookings] = useState([]);
@@ -359,11 +362,12 @@ export default function App() {
   // Staff Mode State
   const [selectedStaffRooms, setSelectedStaffRooms] = useState([]);
   const [isStaffCheckInModalOpen, setIsStaffCheckInModalOpen] = useState(false);
-  const [selectedBookedRoom, setSelectedBookedRoom] = useState(null); // For handling 'booked' room click in staff mode
+  const [selectedBookedRoom, setSelectedBookedRoom] = useState(null); 
   const [isStaffBookingModalOpen, setIsStaffBookingModalOpen] = useState(false);
   
   const [staffCheckInForm, setStaffCheckInForm] = useState({
       totalPrice: 0,
+      nights: 1, // ฟิลด์ใหม่สำหรับจำนวนคืน
       paymentMethod: 'เงินสด',
       isReceiptNeeded: false,
       keyDepositCollected: false,
@@ -435,23 +439,9 @@ export default function App() {
         await signInAnonymously(auth);
       } catch (error) {
         if (isMounted) {
-            // Check if it's the specific blocked domain error or just general failure
-            const isBlocked = error.code === 'auth/requests-from-referer-blocked' || error.message.includes('blocked');
-            
-            if (isBlocked) {
-                 console.warn("Firebase Auth blocked in Preview environment. Switching to Demo Mode.");
-            } else {
-                 console.error("Authentication Error:", error);
-            }
-            
             setUseMockData(true);
             setUser({ uid: 'mock-user', isAnonymous: true });
             setLoading(false);
-            
-            // Only show notification once
-            if (!notification) {
-                showNotification('เชื่อมต่อ Firebase ไม่ได้ (ติดสิทธิ์ Domain) - สลับใช้โหมดจำลองข้อมูล', 'error');
-            }
         }
       }
     };
@@ -476,22 +466,15 @@ export default function App() {
 
   useEffect(() => {
     if (useMockData) {
-        // Load Mock Data
         setRooms(DEFAULT_ROOM_SEEDS);
-        setBookings([
-            { id: 'm1', roomId: '1', roomName: 'บ้าน 1', guestName: 'คุณสมชาย (ตัวอย่าง)', checkInDate: formatDate(new Date()), checkOutDate: addDays(formatDate(new Date()), 1), status: 'occupied', totalPrice: 500, deposit: 0, totalPaid: 0 },
-            { id: 'm2', roomId: '3', roomName: 'บ้าน 3', guestName: 'คุณสมหญิง (ตัวอย่าง)', checkInDate: addDays(formatDate(new Date()), 1), checkOutDate: addDays(formatDate(new Date()), 2), status: 'booked', totalPrice: 700, deposit: 300, totalPaid: 0 }
-        ]);
-        setExpenses([
-             { id: 'e1', title: 'ซื้อน้ำดื่ม', amount: 50, category: 'น้ำดื่ม', date: formatDate(new Date()), docNo: 'EX-Mock-001', payee: '7-11', paymentMethod: 'เงินสด' }
-        ]);
+        setBookings([]);
+        setExpenses([]);
         setLoading(false);
         return;
     }
 
     if (!user) return;
     
-    // Add Error Handling to snapshots to prevent white screen crashes
     const qRooms = query(collection(db, 'artifacts', appId, 'public', 'data', 'rooms'));
     const unsubRooms = onSnapshot(qRooms, 
         async (snapshot) => {
@@ -506,7 +489,6 @@ export default function App() {
         },
         (error) => {
             console.error("Error fetching rooms:", error);
-            // Fallback if permission denied
             setUseMockData(true);
             setLoading(false);
         }
@@ -619,9 +601,9 @@ export default function App() {
           if (status === 'booked') {
              // Handle checking in an existing booking (showing details)
              setSelectedBookedRoom({ room, booking });
-             // Reset staff checkin form for single room booking check-in
              setStaffCheckInForm({
-                 totalPrice: 0, // Not used here directly, calculated from booking
+                 totalPrice: 0,
+                 nights: 1, // Reset คืนเมื่อเปิดบิลใหม่
                  paymentMethod: 'เงินสด',
                  isReceiptNeeded: false,
                  keyDepositCollected: false,
@@ -677,11 +659,29 @@ export default function App() {
       }
   };
 
+  // --- Staff Check-in Logic (Nights calculation) ---
+  const handleStaffNightsChange = (newNights) => {
+      const n = Math.max(1, parseInt(newNights) || 1); // ห้ามติดลบ ห้ามเป็น 0
+      
+      // คำนวณราคาฐานของห้องทั้งหมดที่เลือกไว้ใหม่
+      let baseTotal = 0;
+      selectedStaffRooms.forEach(rId => {
+          const room = rooms.find(r => r.id === rId);
+          if (room) baseTotal += room.price;
+      });
+
+      setStaffCheckInForm({
+          ...staffCheckInForm,
+          nights: n,
+          totalPrice: baseTotal * n // อัปเดตราคารวมอัตโนมัติ
+      });
+  };
+
   const handleStaffBulkAction = async (actionType) => {
       if (selectedStaffRooms.length === 0) return;
 
       if (actionType === 'checkin') {
-          // Calculate total price of selected rooms
+          // Calculate total price of selected rooms for 1 night initially
           let total = 0;
           selectedStaffRooms.forEach(rId => {
               const room = rooms.find(r => r.id === rId);
@@ -691,8 +691,10 @@ export default function App() {
                   total += room.price;
               }
           });
+          
           setStaffCheckInForm({
               totalPrice: total,
+              nights: 1, // กำหนดค่าเริ่มต้นเป็น 1 คืนเสมอเมื่อเปิดหน้าต่างขึ้นมา
               paymentMethod: 'เงินสด',
               isReceiptNeeded: false,
               keyDepositCollected: false,
@@ -728,8 +730,9 @@ export default function App() {
   const confirmStaffCheckIn = async (isBookedRoom = false) => {
       if (useMockData) { showNotification('โหมดตัวอย่าง: บันทึกข้อมูลสำเร็จ'); setIsStaffCheckInModalOpen(false); setIsStaffBookingModalOpen(false); setSelectedStaffRooms([]); return; }
 
-      const nextDay = new Date(selectedDate); nextDay.setDate(nextDay.getDate() + 1);
-      const checkoutDate = formatDate(nextDay);
+      // ใช้จำนวนคืนจาก Form สำหรับคำนวณวันเช็คเอาท์
+      const checkInNights = staffCheckInForm.nights || 1;
+      const checkoutDate = addDays(selectedDate, checkInNights); 
       const checkInDocNo = generateSequentialDocNo('RC', selectedDate, bookings);
       
       // Process Image
@@ -757,7 +760,9 @@ export default function App() {
               setIsStaffBookingModalOpen(false);
               showNotification('เช็คอินลูกค้าจอง เรียบร้อยแล้ว');
           } else {
-              // Handle Walk-in Bulk
+              // Handle Walk-in Bulk (หารเฉลี่ยราคากลับเข้าไปแต่ละห้อง)
+              const pricePerRoom = staffCheckInForm.totalPrice / selectedStaffRooms.length;
+
               const batchPromises = selectedStaffRooms.map((rId) => {
                   const room = rooms.find(r => r.id === rId);
                   const { status } = checkRoomStatus(rId, selectedDate, true);
@@ -766,9 +771,11 @@ export default function App() {
                   return addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'bookings'), {
                       roomId: rId, roomName: room.name, roomPrice: room.price,
                       guestName: 'รายวัน walk-in', phone: '', 
-                      checkInDate: selectedDate, checkOutDate: checkoutDate, nights: 1,
-                      totalPrice: room.price, 
-                      totalPaid: room.price, 
+                      checkInDate: selectedDate, 
+                      checkOutDate: checkoutDate, // บันทึกตามจำนวนคืน
+                      nights: checkInNights, // บันทึกจำนวนคืน
+                      totalPrice: pricePerRoom, 
+                      totalPaid: pricePerRoom, 
                       deposit: 0, 
                       keyDeposit: staffCheckInForm.keyDepositCollected ? 100 : 0, 
                       extraBedPrice: 0,
@@ -784,7 +791,7 @@ export default function App() {
               }).filter(Boolean);
               
               if(batchPromises.length > 0) await Promise.all(batchPromises);
-              showNotification(`เช็คอินเรียบร้อย`);
+              showNotification(`เช็คอินเรียบร้อย (${checkInNights} คืน)`);
               setIsStaffCheckInModalOpen(false);
               setSelectedStaffRooms([]);
           }
@@ -1734,15 +1741,27 @@ export default function App() {
       {/* Staff Walk-in Check-in Modal */}
       <Modal isOpen={isStaffCheckInModalOpen} onClose={() => setIsStaffCheckInModalOpen(false)} title="ยืนยันการรับเงิน (Walk-in)">
           <div className="space-y-6">
-              <div className="bg-emerald-50 rounded-2xl p-6 border border-emerald-100 text-center relative">
-                  <p className="text-slate-500 text-sm font-medium mb-1">ยอดชำระรวม ({selectedStaffRooms.length} ห้อง)</p>
-                  <input 
-                    type="number" 
-                    className="text-4xl font-black text-emerald-600 bg-transparent text-center w-full outline-none focus:ring-0" 
-                    value={staffCheckInForm.totalPrice}
-                    onChange={(e) => setStaffCheckInForm({...staffCheckInForm, totalPrice: Number(e.target.value)})}
-                  />
-                  <p className="text-slate-400 text-xs">บาท</p>
+              
+              <div className="bg-emerald-50 rounded-2xl p-6 border border-emerald-100 relative">
+                  <div className="flex justify-between items-center mb-4 pb-4 border-b border-emerald-200/50">
+                      <span className="font-bold text-emerald-800 flex items-center gap-2"><Moon size={18}/> จำนวนคืน</span>
+                      <div className="flex items-center gap-3">
+                          <button onClick={() => handleStaffNightsChange(staffCheckInForm.nights - 1)} className="w-8 h-8 flex items-center justify-center bg-white rounded-full shadow-sm text-emerald-600 hover:bg-emerald-100 font-bold">-</button>
+                          <span className="font-black text-2xl text-emerald-700 w-8 text-center">{staffCheckInForm.nights}</span>
+                          <button onClick={() => handleStaffNightsChange(staffCheckInForm.nights + 1)} className="w-8 h-8 flex items-center justify-center bg-white rounded-full shadow-sm text-emerald-600 hover:bg-emerald-100 font-bold">+</button>
+                      </div>
+                  </div>
+
+                  <div className="text-center">
+                      <p className="text-slate-500 text-sm font-medium mb-1">ยอดชำระรวม ({selectedStaffRooms.length} ห้อง x {staffCheckInForm.nights} คืน)</p>
+                      <input 
+                        type="number" 
+                        className="text-4xl font-black text-emerald-600 bg-transparent text-center w-full outline-none focus:ring-0" 
+                        value={staffCheckInForm.totalPrice}
+                        onChange={(e) => setStaffCheckInForm({...staffCheckInForm, totalPrice: Number(e.target.value)})}
+                      />
+                      <p className="text-slate-400 text-xs">บาท</p>
+                  </div>
               </div>
 
               <div>
@@ -2018,6 +2037,91 @@ export default function App() {
                 <button onClick={handleBookingSave} className={`py-3 bg-slate-800 text-white rounded-xl font-bold hover:bg-slate-900 flex justify-center items-center gap-2 shadow-lg shadow-slate-300 transition-all transform active:scale-95 ${formData.id ? 'px-8' : 'w-full'}`}><Save size={18}/> {formData.id ? 'บันทึก' : 'ยืนยันการจอง'}</button>
             </div>
         </div>
+      </Modal>
+
+      <Modal isOpen={isCheckInModalOpen} onClose={() => setIsCheckInModalOpen(false)} title={`เช็คอิน / จัดการห้องพัก (${formData.docNo})`} maxWidth="max-w-4xl">
+         <div className="space-y-6 font-sans">
+            <div className="flex flex-col md:flex-row gap-6">
+                <div className="w-full md:w-1/2 space-y-4">
+                    <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm">
+                        <h3 className="font-bold text-slate-700 mb-4 flex items-center gap-2 text-sm uppercase tracking-wide"><FileText className="text-blue-500" size={16}/> รายละเอียดห้องพัก</h3>
+                        <div className="space-y-3 text-sm text-slate-600">
+                            <div className="flex justify-between p-2 bg-slate-50 rounded-lg"><span>ห้องหลัก:</span><span className="font-black text-slate-800 text-lg">{selectedRoom?.name}</span></div>
+                            <div className="flex justify-between items-center px-2"><span>ลูกค้า:</span><span className="font-bold text-slate-800">{formData.guestName}</span></div>
+                             {/* Show Car/ID if exists */}
+                            {(formData.licensePlate || formData.idCard || formData.lineId) && (
+                                <div className="flex flex-wrap gap-2 px-2 text-xs text-slate-500">
+                                    {formData.lineId && <span className="bg-emerald-50 text-emerald-600 px-2 py-1 rounded flex items-center gap-1 font-bold"><MessageCircle size={10}/> {formData.lineId}</span>}
+                                    {formData.licensePlate && <span className="bg-slate-100 px-2 py-1 rounded flex items-center gap-1"><Car size={10}/> {formData.licensePlate}</span>}
+                                    {formData.idCard && <span className="bg-slate-100 px-2 py-1 rounded flex items-center gap-1"><CreditCard size={10}/> {formData.idCard}</span>}
+                                </div>
+                            )}
+                            <div className="flex justify-between items-center px-2"><span>เข้าพัก:</span><span className="font-medium">{formData.checkInDate} ({formData.nights} คืน)</span></div>
+                            <div className="flex justify-between pt-2 border-t px-2"><span>สถานะ:</span><span className={`font-bold px-3 py-0.5 rounded-full text-xs ${bookings.find(b=>b.id===formData.id)?.status === 'occupied' ? 'bg-blue-100 text-blue-600' : 'bg-yellow-100 text-yellow-600'}`}>{bookings.find(b=>b.id===formData.id)?.status === 'occupied' ? 'เข้าพักแล้ว' : 'จองแล้ว'}</span></div>
+                        </div>
+                    </div>
+                    {formData.billPhoto && (
+                        <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm">
+                            <h3 className="font-bold text-slate-700 mb-3 flex items-center gap-2 text-sm uppercase tracking-wide"><ImageIcon className="text-emerald-500" size={16}/> หลักฐานการโอน / บิล</h3>
+                            <div className="rounded-xl overflow-hidden border border-slate-200">
+                                <img src={formData.billPhoto} alt="Bill Evidence" className="w-full h-auto object-cover max-h-64" />
+                            </div>
+                        </div>
+                    )}
+                    {formData.groupCheckInRooms.length > 1 && (
+                        <div className="bg-blue-50/50 border border-blue-100 rounded-2xl p-5 shadow-sm">
+                            <h3 className="font-bold text-blue-800 mb-3 flex items-center gap-2 text-sm"><Layers size={16}/> ห้องในกลุ่ม ({formData.groupCheckInRooms.length})</h3>
+                            <div className="space-y-2 max-h-48 overflow-y-auto pr-1 custom-scrollbar">
+                                {formData.groupCheckInRooms.map(bid => {
+                                    const b = bookings.find(x => x.id === bid);
+                                    if (!b) return null;
+                                    const isOccupied = b.status === 'occupied';
+                                    return (
+                                        <div key={bid} className="flex justify-between items-center bg-white p-3 rounded-xl border border-blue-100 text-sm shadow-sm">
+                                            <span className="font-bold text-slate-700">{b.roomName}</span>
+                                            <div className="flex items-center gap-2">
+                                                <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${isOccupied ? 'bg-blue-100 text-blue-600' : 'bg-yellow-100 text-yellow-600'}`}>{isOccupied ? 'พัก' : 'จอง'}</span>
+                                                {isOccupied && (<button onClick={() => handleCheckoutSingle(b.id, b.keyDeposit)} className="text-[10px] bg-orange-100 text-orange-600 px-2 py-1 rounded border border-orange-200 hover:bg-orange-200">คืนห้อง</button>)}
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
+                    <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm">
+                        <h3 className="font-bold text-slate-700 mb-3 flex items-center gap-2 text-sm uppercase tracking-wide"><Key className="text-yellow-500" size={16}/> ประกันกุญแจ</h3>
+                        <div className="flex justify-between items-center"><label className="text-sm text-slate-500">ยอดเงินประกัน (คืนตอนออก)</label><div className="flex items-center gap-2"><input type="number" className="w-24 p-2 bg-slate-50 border-0 rounded-lg text-right font-bold text-slate-800" value={formData.keyDeposit} onChange={e => setFormData({...formData, keyDeposit: e.target.value})} /><span className="text-sm text-slate-400">บาท</span></div></div>
+                    </div>
+                </div>
+                <div className="w-full md:w-1/2 space-y-4">
+                    <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+                        <div className="bg-slate-50 px-5 py-4 border-b border-slate-100 flex justify-between items-center"><h3 className="font-bold text-slate-700 flex items-center gap-2 text-sm uppercase tracking-wide"><CreditCard className="text-emerald-500" size={16}/> สรุปค่าใช้จ่าย</h3>{fin.remainingToCollect <= 0 && <span className="bg-emerald-100 text-emerald-700 text-[10px] px-2 py-1 rounded-full font-bold flex items-center gap-1"><CheckCircle size={10}/> ชำระครบ</span>}</div>
+                        <div className="p-5 space-y-3 text-sm">
+                            <div className="flex justify-between"><span>ค่าห้องพัก ({fin.count || fin.nights} {fin.count ? 'ห้อง' : 'คืน'})</span><span className="font-medium">{fin.grandTotalRoomPrice?.toLocaleString() || fin.roomTotal?.toLocaleString()}</span></div>
+                            <div className="flex justify-between items-center"><span>ค่าบริการเสริม</span><input type="number" className="w-20 bg-slate-50 rounded px-2 py-1 text-right focus:ring-2 focus:ring-emerald-500 outline-none" value={formData.extraBedPrice} onChange={e => setFormData({...formData, extraBedPrice: e.target.value})} /></div>
+                            <div className="flex justify-between text-blue-600 font-medium"><span>+ เงินประกันกุญแจ</span><span>{Number(formData.keyDeposit).toLocaleString()}</span></div>
+                            <div className="flex justify-between text-slate-400 border-b border-slate-100 pb-3 mb-2"><span>ยอดรวมทั้งสิ้น</span><span className="font-bold text-slate-600">{fin.totalBill?.toLocaleString() || fin.grandTotal?.toLocaleString()}</span></div>
+                            <div className="flex justify-between text-emerald-600 font-medium"><span>- ชำระแล้ว (มัดจำ+เดิม)</span><span>-{fin.alreadyPaid?.toLocaleString() || fin.previouslyPaid?.toLocaleString()}</span></div>
+                            <div className="flex justify-between items-center pt-2"><span className="font-bold text-lg text-red-500">ยอดคงเหลือสุทธิ</span><span className="font-black text-2xl text-red-500">{fin.remainingToCollect?.toLocaleString()} ฿</span></div>
+                        </div>
+                        <div className="bg-emerald-50/50 p-5 border-t border-emerald-100">
+                            <div className="flex justify-between items-center mb-3"><label className="text-sm font-bold text-emerald-800">รับเงินเพิ่มครั้งนี้</label><div className="flex gap-1"><button onClick={() => setFormData({...formData, currentPayment: fin.remainingToCollect})} className="text-[10px] bg-white border border-emerald-200 text-emerald-600 px-2 py-1 rounded hover:bg-emerald-50 font-bold">จ่ายเต็ม</button><button onClick={() => setFormData({...formData, currentPayment: 0})} className="text-[10px] bg-white border border-slate-200 text-slate-600 px-2 py-1 rounded hover:bg-slate-50">0</button></div></div>
+                            <div className="flex flex-col gap-3">
+                                <input type="number" className="w-full p-3 rounded-xl border border-emerald-200 text-right font-bold text-xl text-emerald-700 focus:ring-2 focus:ring-emerald-500 outline-none shadow-sm mb-2 bg-white" value={formData.currentPayment} onChange={e => setFormData({...formData, currentPayment: e.target.value})} placeholder="0" />
+                                <button onClick={handleCheckInSave} className="w-full bg-emerald-600 text-white px-5 py-3 rounded-xl font-bold shadow-lg shadow-emerald-200 hover:bg-emerald-700 transition-all flex justify-center items-center gap-2 active:scale-95"><Coins size={20}/> บันทึกรับเงิน</button>
+                            </div>
+                            {remainingAfterCurrentPay > 0 && <p className="text-xs text-orange-500 text-right mt-2 font-bold">* จะเหลือค้างอีก {remainingAfterCurrentPay.toLocaleString()} บาท</p>}
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {(currentBookingStatus === 'occupied' || (!isGroupCheckIn && currentBookingStatus === 'occupied')) && (
+                <div className="flex justify-end pt-4 border-t border-slate-100">
+                    <button onClick={handleCheckout} className="px-8 py-3 bg-orange-500 text-white rounded-xl font-bold shadow-lg hover:bg-orange-600 flex items-center gap-2 transition-all transform active:scale-95"><LogOut size={20}/> เช็คเอาท์ / คืนห้อง</button>
+                </div>
+            )}
+         </div>
       </Modal>
 
       <Modal isOpen={isExpenseModalOpen} onClose={() => setIsExpenseModalOpen(false)} title={expenseModalMode === 'create' ? `บันทึกรายจ่าย` : `แก้ไขรายจ่าย`}>
