@@ -1,23 +1,17 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { initializeApp } from 'firebase/app';
-import { 
-  getAuth, 
-  signInAnonymously, 
-  onAuthStateChanged,
-  signInWithCustomToken 
-} from 'firebase/auth';
-import { 
-  getFirestore, 
-  collection, 
-  addDoc, 
-  query, 
-  onSnapshot, 
-  doc, 
-  updateDoc, 
-  deleteDoc,
-  Timestamp,
-  setDoc,
+import { auth, db, storage, appId } from './lib/firebase';
+import { signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import {
+  collection, addDoc, query, onSnapshot, doc, updateDoc, deleteDoc, Timestamp, setDoc,
 } from 'firebase/firestore';
+import { ref as storageRef, deleteObject } from 'firebase/storage';
+import { Modal, ConfirmModal } from './components/Modal';
+import { LoginScreen } from './components/LoginScreen';
+import {
+  DEFAULT_ROOM_SEEDS, DEFAULT_EXPENSE_CATEGORIES, PAYMENT_METHODS, COLORS, TEMP_DURATIONS,
+  getNowTimeStr, formatDate, addDays, calculateNights, calculateAge,
+  generateSequentialDocNo, uploadBillPhoto, exportToCSV, generateBookingSummary,
+} from './lib/utils';
 import { 
   Calendar, Users, Phone, Camera, CheckCircle, 
   LogOut, MessageSquare, Plus, BarChart2, 
@@ -60,135 +54,6 @@ if (!document.getElementById('custom-font-style')) {
   document.head.appendChild(fontStyle);
 }
 
-// --- Configuration ---
-const firebaseConfig = {
-  apiKey: "AIzaSyAZBJxbbrZkl2E8MLhLHdmU0DqRmdEhj0U",
-  authDomain: "chanpha-resort.firebaseapp.com",
-  projectId: "chanpha-resort",
-  storageBucket: "chanpha-resort.firebasestorage.app",
-  messagingSenderId: "832616208030",
-  appId: "1:832616208030:web:17e70d393aa4977717cd8f",
-  measurementId: "G-XZMVYGY9FZ"
-};
-
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
-const appId = 'my-resort-app-v1'; // คืนค่ากลับเป็นของเดิมเพื่อให้ข้อมูลเก่ากลับมา
-
-// --- Constants ---
-const DEFAULT_ROOM_SEEDS = [
-  { id: '1', name: 'บ้าน 1', type: 'บ้านเตียงเดี่ยว', price: 500 },
-  { id: '2', name: 'บ้าน 2', type: 'บ้านเตียงเดี่ยว', price: 500 },
-  { id: '3', name: 'บ้าน 3', type: 'บ้านใหญ่', price: 700 },
-  { id: '4', name: 'ห้อง 4', type: 'ห้องเตียงเดี่ยว', price: 400 },
-  { id: '5', name: 'ห้อง 5', type: 'ห้องเตียงเดี่ยว', price: 400 },
-  { id: '6', name: 'ห้อง 6', type: 'ห้องเตียงเดี่ยว', price: 400 },
-  { id: '10', name: 'ห้อง 10', type: 'ห้องเตียงคู่', price: 500 },
-  { id: '11', name: 'ห้อง 11', type: 'ห้องเตียงคู่', price: 500 },
-  { id: 'B1', name: 'ห้อง B1', type: 'ห้องเตียงเดี่ยว', price: 350 },
-  { id: 'B2', name: 'ห้อง B2', type: 'ห้องเตียงเดี่ยว', price: 350 },
-  { id: 'B3', name: 'ห้อง B3', type: 'ห้องเตียงคู่', price: 500 },
-];
-
-const DEFAULT_EXPENSE_CATEGORIES = ['ค่าแรงคนงาน', 'ค่าอินเตอร์เน็ต', 'ของใช้สิ้นเปลือง (สบู่/ทิชชู่)', 'น้ำดื่ม', 'ค่าน้ำ/ค่าไฟ', 'ซ่อมบำรุง', 'อื่นๆ'];
-const PAYMENT_METHODS = ['เงินสด', 'เงินโอน'];
-const COLORS = ['#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#6366f1', '#14b8a6', '#84cc16', '#64748b'];
-
-// --- Utils ---
-const formatDate = (date) => date.toISOString().split('T')[0];
-
-const generateSequentialDocNo = (prefix, dateStr, existingDocs) => {
-    const yearMonth = dateStr.slice(0, 7).replace('-', ''); 
-    const pattern = new RegExp(`^${prefix}-${yearMonth}-(\\d{3})$`);
-    let maxNum = 0;
-    existingDocs.forEach(d => {
-        [d.docNo, d.checkInDocNo].forEach(code => {
-            if(code) {
-                const match = code.match(pattern);
-                if (match) {
-                    const num = parseInt(match[1], 10);
-                    if (num > maxNum) maxNum = num;
-                }
-            }
-        });
-    });
-    const nextNum = String(maxNum + 1).padStart(3, '0');
-    return `${prefix}-${yearMonth}-${nextNum}`;
-};
-
-const calculateNights = (start, end) => {
-  const diff = new Date(end) - new Date(start);
-  const days = diff / (1000 * 60 * 60 * 24);
-  return days > 0 ? days : 1;
-};
-
-const addDays = (dateStr, days) => {
-    const date = new Date(dateStr);
-    date.setDate(date.getDate() + parseInt(days));
-    return formatDate(date);
-};
-
-const calculateAge = (dob) => {
-    if (!dob) return '';
-    const birthDate = new Date(dob);
-    const today = new Date();
-    let age = today.getFullYear() - birthDate.getFullYear();
-    const m = today.getMonth() - birthDate.getMonth();
-    if (m < 0 || (m === 0 && today.getDate() < birthDate.getDate())) {
-        age--;
-    }
-    return age;
-};
-
-// Image Compression for Firestore (Base64)
-const compressImage = (file) => {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.readAsDataURL(file);
-        reader.onload = (event) => {
-            const img = new Image();
-            img.src = event.target.result;
-            img.onload = () => {
-                const canvas = document.createElement('canvas');
-                const maxWidth = 800;
-                const scale = maxWidth / img.width;
-                canvas.width = maxWidth;
-                canvas.height = img.height * scale;
-                
-                const ctx = canvas.getContext('2d');
-                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-                
-                // Compress to JPEG with 0.7 quality
-                resolve(canvas.toDataURL('image/jpeg', 0.7));
-            };
-            img.onerror = (err) => reject(err);
-        };
-        reader.onerror = (err) => reject(err);
-    });
-};
-
-const exportToCSV = (data, filename) => {
-    if (!data || !data.length) return;
-    const headers = Object.keys(data[0]);
-    const csvContent = [
-      headers.join(','),
-      ...data.map(row => headers.map(fieldName => `"${row[fieldName] || ''}"`).join(','))
-    ].join('\n');
-    const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.setAttribute('download', `${filename}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-};
-
-const generateBookingSummary = (customerName, roomNames, checkInDate, nights, deposit, docNo) => {
-    return `ยืนยันการจองห้องพัก "จันผารีสอร์ท" 🌿\n\n👤 คุณ: ${customerName}\n🏠 ห้อง: ${roomNames}\n📅 เข้าพัก: ${checkInDate} (${nights} คืน)\n💰 ยอดมัดจำ: ${Number(deposit).toLocaleString()} บาท\n🔖 เลขที่จอง: ${docNo}\n\n📌 เงื่อนไขการจอง:\nหากต้องการยกเลิกการจอง ต้องแจ้งล่วงหน้าอย่างน้อย 5 วัน เพื่อรับเงินคืนเต็มจำนวน (100%) หากแจ้งช้ากว่ากำหนด ขอสงวนสิทธิ์ในการคืนเงินมัดจำครับ`;
-};
-
 // --- Custom Components ---
 const CustomRevenueTooltip = ({ active, payload, label }) => {
     if (active && payload && payload.length) {
@@ -204,116 +69,27 @@ const CustomRevenueTooltip = ({ active, payload, label }) => {
     return null;
 };
 
-const Modal = ({ title, isOpen, onClose, children, maxWidth = "max-w-lg" }) => {
-  if (!isOpen) return null;
-  return (
-    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4 overflow-y-auto">
-      <div className={`bg-white rounded-[2rem] shadow-2xl w-full ${maxWidth} relative flex flex-col max-h-[95vh] animate-fade-in overflow-hidden`}>
-        <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-white sticky top-0 z-10">
-          <h2 className="text-xl font-bold text-slate-800">{title}</h2>
-          <button onClick={onClose} className="p-2 bg-slate-100 rounded-full hover:bg-slate-200 text-slate-500 transition-colors"><X size={20} /></button>
-        </div>
-        <div className="p-6 overflow-y-auto bg-white custom-scrollbar">{children}</div>
-      </div>
-    </div>
-  );
-};
-
-// --- Login Screen ---
-const LoginScreen = ({ onLogin }) => {
-    const [pass, setPass] = useState('');
-    const [error, setError] = useState('');
-    const [showOwnerInput, setShowOwnerInput] = useState(false);
-
-    const handleOwnerLogin = (e) => {
-        e.preventDefault();
-        if (pass === '258989') onLogin('owner');
-        else setError('รหัสผ่านไม่ถูกต้อง');
-    };
-
-    return (
-        <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4 font-sans relative overflow-hidden">
-             <div className="absolute top-0 left-0 w-full h-full overflow-hidden pointer-events-none">
-                <div className="absolute top-[-10%] right-[-5%] w-96 h-96 bg-emerald-200 rounded-full mix-blend-multiply filter blur-3xl opacity-50 animate-blob"></div>
-                <div className="absolute bottom-[-10%] left-[-5%] w-96 h-96 bg-teal-200 rounded-full mix-blend-multiply filter blur-3xl opacity-50 animate-blob animation-delay-2000"></div>
-            </div>
-
-            <div className="bg-white/90 backdrop-blur-xl p-8 md:p-10 rounded-[2.5rem] shadow-2xl w-full max-w-sm text-center space-y-8 border border-white z-10 relative">
-                <div className="space-y-2">
-                    <div className="w-20 h-20 bg-gradient-to-tr from-emerald-500 to-teal-400 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-lg shadow-emerald-200 transform rotate-3">
-                        <Shield size={40} className="text-white drop-shadow-sm"/>
-                    </div>
-                    <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight">Chanpha Resort</h1>
-                    <p className="text-slate-500 text-sm font-medium">ระบบจัดการห้องพัก</p>
-                </div>
-
-                <div className="space-y-4">
-                    {!showOwnerInput && (
-                        <button 
-                            onClick={() => onLogin('staff')} 
-                            className="w-full py-4 bg-white border-2 border-slate-100 hover:border-emerald-400 hover:bg-emerald-50/50 text-slate-600 rounded-2xl transition-all duration-300 flex items-center justify-between px-6 group shadow-sm hover:shadow-lg"
-                        >
-                            <div className="flex items-center gap-4">
-                                <div className="p-3 bg-slate-100 text-slate-500 rounded-xl group-hover:bg-emerald-500 group-hover:text-white transition-colors">
-                                    <User size={24}/>
-                                </div>
-                                <div className="text-left">
-                                    <p className="font-bold text-lg text-slate-700 group-hover:text-emerald-800">ทีมงานทั่วไป</p>
-                                    <p className="text-xs text-slate-400">สำหรับคุณแม่ / พนักงาน</p>
-                                </div>
-                            </div>
-                            <ArrowRight size={20} className="text-slate-300 group-hover:text-emerald-500 group-hover:translate-x-1 transition-all"/>
-                        </button>
-                    )}
-
-                    <div className={`transition-all duration-300 ease-in-out`}>
-                        {!showOwnerInput ? (
-                            <button 
-                                onClick={() => setShowOwnerInput(true)} 
-                                className="w-full py-4 bg-white border-2 border-slate-100 hover:border-slate-800 text-slate-600 rounded-2xl transition-all duration-300 flex items-center justify-between px-6 group shadow-sm hover:shadow-lg"
-                            >
-                                <div className="flex items-center gap-4">
-                                    <div className="p-3 bg-slate-100 text-slate-500 rounded-xl group-hover:bg-slate-800 group-hover:text-white transition-colors">
-                                        <Lock size={24}/>
-                                    </div>
-                                    <div className="text-left">
-                                        <p className="font-bold text-lg text-slate-700 group-hover:text-slate-900">เจ้าของกิจการ</p>
-                                        <p className="text-xs text-slate-400">เข้าถึงรายงานและตั้งค่า</p>
-                                    </div>
-                                </div>
-                                <ArrowRight size={20} className="text-slate-300 group-hover:text-slate-800 group-hover:translate-x-1 transition-all"/>
-                            </button>
-                        ) : (
-                            <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100 animate-fade-in">
-                                <div className="flex justify-between items-center mb-4">
-                                    <h3 className="font-bold text-slate-700 flex items-center gap-2 text-sm"><Lock size={16}/> รหัสผ่านเจ้าของ</h3>
-                                    <button onClick={() => {setShowOwnerInput(false); setError(''); setPass('');}} className="text-slate-400 hover:text-slate-600 bg-white p-1 rounded-full shadow-sm"><X size={16}/></button>
-                                </div>
-                                <form onSubmit={handleOwnerLogin} className="space-y-3">
-                                    <input 
-                                        type="password" 
-                                        placeholder="PIN Code" 
-                                        className="w-full p-3 border-0 bg-white rounded-xl text-center text-2xl font-bold tracking-[0.5em] focus:ring-2 focus:ring-emerald-500 shadow-inner text-emerald-800 placeholder:text-slate-200 placeholder:font-normal placeholder:tracking-normal outline-none transition-all"
-                                        value={pass}
-                                        autoFocus
-                                        onChange={(e) => {setPass(e.target.value); setError('');}}
-                                    />
-                                    {error && <p className="text-red-500 text-xs text-center font-medium bg-red-50 py-1 rounded-lg">{error}</p>}
-                                    <button type="submit" className="w-full py-3 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700 shadow-lg shadow-emerald-200 transition-all transform active:scale-95">
-                                        เข้าสู่ระบบ
-                                    </button>
-                                </form>
-                            </div>
-                        )}
-                    </div>
-                </div>
-                
-                <div className="text-[10px] text-slate-400 uppercase tracking-wider">
-                    © 2025 Chanpha Resort Management
+const CustomDailyTooltip = ({ active, payload, label }) => {
+    if (active && payload && payload.length) {
+        const data = payload[0].payload;
+        return (
+            <div className="bg-white p-4 border border-slate-100 rounded-xl shadow-xl z-50 min-w-[150px]">
+                <p className="font-bold text-slate-500 mb-2 border-b border-slate-100 pb-2 text-xs">วันที่ {label}</p>
+                <div className="space-y-1">
+                   <p className="text-emerald-600 font-black text-xl leading-none mb-3">{data.revenue.toLocaleString(undefined, {maximumFractionDigits:0})} <span className="text-sm font-bold">฿</span></p>
+                   <div className="flex items-center justify-between text-xs font-bold bg-emerald-50 text-emerald-700 px-2 py-1.5 rounded-lg mb-1">
+                       <span className="flex items-center gap-1"><Banknote size={12}/> เงินสด</span>
+                       <span>{data.cash.toLocaleString(undefined, {maximumFractionDigits:0})}</span>
+                   </div>
+                   <div className="flex items-center justify-between text-xs font-bold bg-blue-50 text-blue-700 px-2 py-1.5 rounded-lg">
+                       <span className="flex items-center gap-1"><QrCode size={12}/> เงินโอน</span>
+                       <span>{data.transfer.toLocaleString(undefined, {maximumFractionDigits:0})}</span>
+                   </div>
                 </div>
             </div>
-        </div>
-    );
+        );
+    }
+    return null;
 };
 
 export default function App() {
@@ -334,10 +110,14 @@ export default function App() {
     
   const [notification, setNotification] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [confirmDialog, setConfirmDialog] = useState(null);
 
   const [reportMonth, setReportMonth] = useState(formatDate(new Date()).slice(0, 7)); 
   const [reportSelectedDay, setReportSelectedDay] = useState(null); 
   const [isReportDetailOpen, setIsReportDetailOpen] = useState(false); 
+  const [reportViewMode, setReportViewMode] = useState('weekly');
+  const [selectedReportWeek, setSelectedReportWeek] = useState(0);
+  const [reportDayPopup, setReportDayPopup] = useState(null);
 
   const [dynamicCategories, setDynamicCategories] = useState(DEFAULT_EXPENSE_CATEGORIES);
   const [payeeHistory, setPayeeHistory] = useState([]);
@@ -349,25 +129,23 @@ export default function App() {
   const [isBookingSummaryOpen, setIsBookingSummaryOpen] = useState(false);
   const [bookingSummaryText, setBookingSummaryText] = useState('');
 
-  // Message Preview State
   const [isMessagePreviewOpen, setIsMessagePreviewOpen] = useState(false);
   const [messagePreviewText, setMessagePreviewText] = useState('');
 
-  // Search State for Guest Directory
   const [guestSearchTerm, setGuestSearchTerm] = useState('');
-
-  // Timeline State
   const [timelineStartDate, setTimelineStartDate] = useState(formatDate(new Date()));
 
-  // Staff Mode State
   const [selectedStaffRooms, setSelectedStaffRooms] = useState([]);
   const [isStaffCheckInModalOpen, setIsStaffCheckInModalOpen] = useState(false);
   const [selectedBookedRoom, setSelectedBookedRoom] = useState(null); 
   const [isStaffBookingModalOpen, setIsStaffBookingModalOpen] = useState(false);
+  const [isTempModalOpen, setIsTempModalOpen] = useState(false);
+  const [tempRoom, setTempRoom] = useState(null);
+  const [tempForm, setTempForm] = useState({ guestName: '', price: 200, durationHours: 3, paymentMethod: 'เงินสด', keyDepositCollected: false });
   
   const [staffCheckInForm, setStaffCheckInForm] = useState({
       totalPrice: 0,
-      nights: 1, // ฟิลด์ใหม่สำหรับจำนวนคืน
+      nights: 1, 
       paymentMethod: 'เงินสด',
       isReceiptNeeded: false,
       keyDepositCollected: false,
@@ -382,7 +160,8 @@ export default function App() {
     extraBedPrice: 0, totalPaid: 0, paymentMethod: 'เงินสด',
     selectedAdditionalRooms: [], groupCheckInRooms: [],
     currentPayment: 0,
-    licensePlate: '', idCard: '', lineId: '', dob: '', billPhoto: null
+    licensePlate: '', idCard: '', lineId: '', dob: '', billPhotoUrl: null,
+    checkInTimeStr: getNowTimeStr(), checkOutTimeStr: ''
   };
   const [formData, setFormData] = useState(initialBookingForm);
 
@@ -439,9 +218,18 @@ export default function App() {
         await signInAnonymously(auth);
       } catch (error) {
         if (isMounted) {
+            const isBlocked = error.code === 'auth/requests-from-referer-blocked' || error.message.includes('blocked');
+            if (isBlocked) {
+                 console.warn("Firebase Auth blocked in Preview environment. Switching to Demo Mode.");
+            } else {
+                 console.error("Authentication Error:", error);
+            }
             setUseMockData(true);
             setUser({ uid: 'mock-user', isAnonymous: true });
             setLoading(false);
+            if (!notification) {
+                showNotification('เชื่อมต่อ Firebase ไม่ได้ (ติดสิทธิ์ Domain) - สลับใช้โหมดจำลองข้อมูล', 'error');
+            }
         }
       }
     };
@@ -467,8 +255,13 @@ export default function App() {
   useEffect(() => {
     if (useMockData) {
         setRooms(DEFAULT_ROOM_SEEDS);
-        setBookings([]);
-        setExpenses([]);
+        setBookings([
+            { id: 'm1', roomId: '1', roomName: 'บ้าน 1', guestName: 'คุณสมชาย (ตัวอย่าง)', checkInDate: formatDate(new Date()), checkOutDate: addDays(formatDate(new Date()), 1), status: 'occupied', totalPrice: 500, deposit: 0, totalPaid: 0, paymentMethod: 'เงินโอน' },
+            { id: 'm2', roomId: '3', roomName: 'บ้าน 3', guestName: 'คุณสมหญิง (ตัวอย่าง)', checkInDate: addDays(formatDate(new Date()), 1), checkOutDate: addDays(formatDate(new Date()), 2), status: 'booked', totalPrice: 700, deposit: 300, totalPaid: 0, paymentMethod: 'เงินสด' }
+        ]);
+        setExpenses([
+             { id: 'e1', title: 'ซื้อน้ำดื่ม', amount: 50, category: 'น้ำดื่ม', date: formatDate(new Date()), docNo: 'EX-Mock-001', payee: '7-11', paymentMethod: 'เงินสด' }
+        ]);
         setLoading(false);
         return;
     }
@@ -515,6 +308,7 @@ export default function App() {
   }, [user, useMockData]);
 
   const showNotification = (msg, type = 'success') => { setNotification({ message: msg, type }); setTimeout(() => setNotification(null), 3000); };
+  const showConfirm = (options) => setConfirmDialog(options);
 
   // --- Logic ---
   const isRoomAvailable = (roomId, start, end, excludeBookingId = null) => {
@@ -535,6 +329,15 @@ export default function App() {
     const todayTime = new Date(formatDate(new Date())).getTime();
     
     const relevantBookings = bookings.filter(b => b.roomId === roomId && b.status !== 'cancelled');
+
+    const temporary = relevantBookings.find(b => {
+      if (b.status !== 'temporary') return false;
+      if (b.checkInDate === date) return true;
+      const start = new Date(b.checkInDate).getTime();
+      const end = new Date(b.checkOutDate).getTime();
+      return (targetTime >= start && targetTime < end) || (targetTime >= end && targetTime <= todayTime);
+    });
+    if (temporary) return { status: 'temporary', booking: temporary };
     
     const active = relevantBookings.find(b => {
        if (b.status !== 'occupied') return false;
@@ -595,15 +398,13 @@ export default function App() {
     return { nights, roomTotal, grandTotal, remainingToCollect, previouslyPaid };
   };
 
-  const handleRoomClick = (room, status, booking) => {
-      // Staff Mode Logic
+  const handleRoomClick = (room, status, booking, source = 'dashboard') => {
       if (role === 'staff') {
           if (status === 'booked') {
-             // Handle checking in an existing booking (showing details)
              setSelectedBookedRoom({ room, booking });
              setStaffCheckInForm({
                  totalPrice: 0,
-                 nights: 1, // Reset คืนเมื่อเปิดบิลใหม่
+                 nights: 1, 
                  paymentMethod: 'เงินสด',
                  isReceiptNeeded: false,
                  keyDepositCollected: false,
@@ -612,8 +413,6 @@ export default function App() {
              setIsStaffBookingModalOpen(true);
              return;
           }
-          
-          // For available or checked-out (can re-sell), toggle selection
           if (status === 'available' || status === 'checked-out') {
               if (selectedStaffRooms.includes(room.id)) {
                   setSelectedStaffRooms(prev => prev.filter(id => id !== room.id));
@@ -621,7 +420,6 @@ export default function App() {
                   setSelectedStaffRooms(prev => [...prev, room.id]);
               }
           }
-          // For occupied, toggle selection for checkout
           if (status === 'occupied') {
               if (selectedStaffRooms.includes(room.id)) {
                   setSelectedStaffRooms(prev => prev.filter(id => id !== room.id));
@@ -632,9 +430,10 @@ export default function App() {
           return;
       }
 
-      // Owner Mode Logic
       setSelectedRoom(room);
-      if (status === 'available' || status === 'checked-out') {
+      const isClickingPastBooking = booking && source === 'timeline'; 
+
+      if (status === 'available' || (status === 'checked-out' && !isClickingPastBooking)) {
           const nextDay = new Date(selectedDate); nextDay.setDate(nextDay.getDate() + 1);
           setFormData({
             ...initialBookingForm, checkInDate: selectedDate, checkOutDate: formatDate(nextDay), nights: 1,
@@ -652,28 +451,31 @@ export default function App() {
             keyDeposit: booking.keyDeposit ? Number(booking.keyDeposit) : (100 * allGroupIds.length),
             selectedAdditionalRooms: [], groupCheckInRooms: allGroupIds,
             currentPayment: 0,
-            licensePlate: booking.licensePlate || '', idCard: booking.idCard || '', lineId: booking.lineId || '', dob: booking.dob || '', billPhoto: booking.billPhoto || null
+            licensePlate: booking.licensePlate || '', idCard: booking.idCard || '', lineId: booking.lineId || '', dob: booking.dob || '', billPhotoUrl: booking.billPhotoUrl || null,
+            paymentMethod: booking.paymentMethod || 'เงินสด',
+            checkInTimeStr: booking.checkInTimeStr || '',
+            checkOutTimeStr: booking.checkOutTimeStr || ''
           });
-          if (status === 'booked') setIsBookingModalOpen(true);
-          else setIsCheckInModalOpen(true);
+          
+          if (status === 'booked') {
+              setIsBookingModalOpen(true);
+          } else {
+              setIsCheckInModalOpen(true);
+          }
       }
   };
 
-  // --- Staff Check-in Logic (Nights calculation) ---
   const handleStaffNightsChange = (newNights) => {
-      const n = Math.max(1, parseInt(newNights) || 1); // ห้ามติดลบ ห้ามเป็น 0
-      
-      // คำนวณราคาฐานของห้องทั้งหมดที่เลือกไว้ใหม่
+      const n = Math.max(1, parseInt(newNights) || 1); 
       let baseTotal = 0;
       selectedStaffRooms.forEach(rId => {
           const room = rooms.find(r => r.id === rId);
           if (room) baseTotal += room.price;
       });
-
       setStaffCheckInForm({
           ...staffCheckInForm,
           nights: n,
-          totalPrice: baseTotal * n // อัปเดตราคารวมอัตโนมัติ
+          totalPrice: baseTotal * n 
       });
   };
 
@@ -681,20 +483,17 @@ export default function App() {
       if (selectedStaffRooms.length === 0) return;
 
       if (actionType === 'checkin') {
-          // Calculate total price of selected rooms for 1 night initially
           let total = 0;
           selectedStaffRooms.forEach(rId => {
               const room = rooms.find(r => r.id === rId);
-              // Only sum available/checked-out rooms
               const { status } = checkRoomStatus(rId, selectedDate, true);
               if (status !== 'occupied' && status !== 'booked') {
                   total += room.price;
               }
           });
-          
           setStaffCheckInForm({
               totalPrice: total,
-              nights: 1, // กำหนดค่าเริ่มต้นเป็น 1 คืนเสมอเมื่อเปิดหน้าต่างขึ้นมา
+              nights: 1, 
               paymentMethod: 'เงินสด',
               isReceiptNeeded: false,
               keyDepositCollected: false,
@@ -702,86 +501,81 @@ export default function App() {
           });
           setIsStaffCheckInModalOpen(true);
       } else if (actionType === 'checkout') {
-          if (!confirm(`ยืนยันคืนห้องจำนวน ${selectedStaffRooms.length} ห้อง?`)) return;
-          try {
-              if (useMockData) { showNotification('โหมดตัวอย่าง: คืนห้องสำเร็จ'); setSelectedStaffRooms([]); return; }
-              const batchPromises = selectedStaffRooms.map(rId => {
-                  const { status, booking } = checkRoomStatus(rId, selectedDate, false);
-                  if (status !== 'occupied') return null;
-                  
-                  return updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', booking.id), {
-                      status: 'checked-out',
-                      checkOutDate: selectedDate,
-                      checkOutTime: Timestamp.now(),
-                      keyDepositReturned: true
-                  });
-              }).filter(Boolean);
-
-              if(batchPromises.length > 0) await Promise.all(batchPromises);
-              showNotification(`คืนห้อง ${batchPromises.length} ห้อง เรียบร้อยแล้ว`);
-              setSelectedStaffRooms([]);
-          } catch (e) {
-              console.error(e);
-              showNotification('เกิดข้อผิดพลาด', 'error');
-          }
+          showConfirm({
+              title: 'ยืนยันคืนห้อง',
+              message: `คืนห้องจำนวน ${selectedStaffRooms.length} ห้อง?`,
+              confirmLabel: 'คืนห้อง',
+              variant: 'default',
+              onConfirm: async () => {
+                  try {
+                      if (useMockData) { showNotification('โหมดตัวอย่าง: คืนห้องสำเร็จ'); setSelectedStaffRooms([]); return; }
+                      const batchPromises = selectedStaffRooms.map(rId => {
+                          const { status, booking } = checkRoomStatus(rId, selectedDate, false);
+                          if (status !== 'occupied') return null;
+                          return updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', booking.id), {
+                              status: 'checked-out',
+                              checkOutDate: selectedDate,
+                              checkOutTime: Timestamp.now(),
+                              keyDepositReturned: true
+                          });
+                      }).filter(Boolean);
+                      if(batchPromises.length > 0) await Promise.all(batchPromises);
+                      showNotification(`คืนห้อง ${batchPromises.length} ห้อง เรียบร้อยแล้ว`);
+                      setSelectedStaffRooms([]);
+                  } catch (e) {
+                      console.error(e);
+                      showNotification('เกิดข้อผิดพลาด', 'error');
+                  }
+              }
+          });
       }
   };
 
   const confirmStaffCheckIn = async (isBookedRoom = false) => {
       if (useMockData) { showNotification('โหมดตัวอย่าง: บันทึกข้อมูลสำเร็จ'); setIsStaffCheckInModalOpen(false); setIsStaffBookingModalOpen(false); setSelectedStaffRooms([]); return; }
 
-      // ใช้จำนวนคืนจาก Form สำหรับคำนวณวันเช็คเอาท์
       const checkInNights = staffCheckInForm.nights || 1;
       const checkoutDate = addDays(selectedDate, checkInNights); 
       const checkInDocNo = generateSequentialDocNo('RC', selectedDate, bookings);
-      
-      // Process Image
-      let billPhotoString = null;
-      if (staffCheckInForm.billPhoto) {
-          try {
-              billPhotoString = await compressImage(staffCheckInForm.billPhoto);
-          } catch (e) { console.error("Error compressing image", e); }
-      }
+
+      // Upload bill photo to Firebase Storage (not Firestore) — avoids 1MB doc limit
+      const billPhotoUrl = await uploadBillPhoto(staffCheckInForm.billPhoto, checkInDocNo);
 
       try {
           if (isBookedRoom && selectedBookedRoom) {
-              // Handle Single Booked Room Check-in
               const { booking } = selectedBookedRoom;
               await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', booking.id), {
                   status: 'occupied',
                   checkInTime: Timestamp.now(),
                   checkInDocNo: checkInDocNo,
-                  keyDeposit: staffCheckInForm.keyDepositCollected ? 100 : 0, 
-                  totalPaid: (booking.totalPrice - booking.deposit) + (staffCheckInForm.keyDepositCollected ? 100 : 0), 
+                  keyDeposit: staffCheckInForm.keyDepositCollected ? 100 : 0,
+                  totalPaid: (booking.totalPrice - booking.deposit) + (staffCheckInForm.keyDepositCollected ? 100 : 0),
                   paymentMethod: staffCheckInForm.paymentMethod,
                   isReceiptRequested: staffCheckInForm.isReceiptNeeded,
-                  billPhoto: billPhotoString
+                  billPhotoUrl: billPhotoUrl || null,
               });
               setIsStaffBookingModalOpen(false);
               showNotification('เช็คอินลูกค้าจอง เรียบร้อยแล้ว');
           } else {
-              // Handle Walk-in Bulk (หารเฉลี่ยราคากลับเข้าไปแต่ละห้อง)
               const pricePerRoom = staffCheckInForm.totalPrice / selectedStaffRooms.length;
-
               const batchPromises = selectedStaffRooms.map((rId) => {
                   const room = rooms.find(r => r.id === rId);
                   const { status } = checkRoomStatus(rId, selectedDate, true);
                   if (status === 'occupied' || status === 'booked') return null;
-
                   return addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'bookings'), {
                       roomId: rId, roomName: room.name, roomPrice: room.price,
-                      guestName: 'รายวัน walk-in', phone: '', 
-                      checkInDate: selectedDate, 
-                      checkOutDate: checkoutDate, // บันทึกตามจำนวนคืน
-                      nights: checkInNights, // บันทึกจำนวนคืน
-                      totalPrice: pricePerRoom, 
-                      totalPaid: pricePerRoom, 
-                      deposit: 0, 
-                      keyDeposit: staffCheckInForm.keyDepositCollected ? 100 : 0, 
+                      guestName: 'รายวัน walk-in', phone: '',
+                      checkInDate: selectedDate,
+                      checkOutDate: checkoutDate,
+                      nights: checkInNights,
+                      totalPrice: pricePerRoom,
+                      totalPaid: pricePerRoom,
+                      deposit: 0,
+                      keyDeposit: staffCheckInForm.keyDepositCollected ? 100 : 0,
                       extraBedPrice: 0,
                       paymentMethod: staffCheckInForm.paymentMethod,
                       isReceiptRequested: staffCheckInForm.isReceiptNeeded,
-                      billPhoto: billPhotoString,
+                      billPhotoUrl: billPhotoUrl || null,
                       status: 'occupied',
                       docNo: generateSequentialDocNo('BK', selectedDate, bookings),
                       checkInDocNo: checkInDocNo,
@@ -789,7 +583,6 @@ export default function App() {
                       updatedAt: Timestamp.now(), updatedBy: 'staff-mode'
                   });
               }).filter(Boolean);
-              
               if(batchPromises.length > 0) await Promise.all(batchPromises);
               showNotification(`เช็คอินเรียบร้อย (${checkInNights} คืน)`);
               setIsStaffCheckInModalOpen(false);
@@ -883,16 +676,23 @@ export default function App() {
       if (useMockData) { showNotification('โหมดตัวอย่าง: บันทึกห้องพักแล้ว'); setRoomForm({ id: '', name: '', type: '', price: '' }); return; }
       try { await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'rooms', roomForm.id), { ...roomForm, price: Number(roomForm.price) }); showNotification('บันทึกห้องพักแล้ว'); setRoomForm({ id: '', name: '', type: '', price: '' }); } catch(error) { showNotification('เกิดข้อผิดพลาด', 'error'); }
   };
-  const handleDeleteRoom = async (rid) => {
-      if(!confirm('ยืนยันลบห้องนี้?')) return;
-      if (useMockData) { showNotification('โหมดตัวอย่าง: ลบห้องสำเร็จ'); return; }
-      try { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'rooms', rid)); showNotification('ลบห้องพักสำเร็จ'); } catch(e){ showNotification('ลบไม่สำเร็จ', 'error'); }
+  
+  const handleDeleteRoom = (rid) => {
+      showConfirm({
+          title: 'ลบห้องพัก',
+          message: 'ยืนยันลบห้องนี้? ข้อมูลจะหายถาวร',
+          confirmLabel: 'ลบ',
+          variant: 'danger',
+          onConfirm: async () => {
+              if (useMockData) { showNotification('โหมดตัวอย่าง: ลบห้องสำเร็จ'); return; }
+              try { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'rooms', rid)); showNotification('ลบห้องพักสำเร็จ'); } catch(e){ showNotification('ลบไม่สำเร็จ', 'error'); }
+          }
+      });
   };
 
   const handleBookingSave = async (e) => {
     e.preventDefault();
     if (!user) return;
-    
     if(!formData.guestName || !formData.phone) return alert('กรุณากรอกชื่อและเบอร์โทรศัพท์');
 
     if (!formData.id) { 
@@ -914,7 +714,6 @@ export default function App() {
     const commonData = {
       guestName: formData.guestName, phone: formData.phone, checkInDate: formData.checkInDate, checkOutDate: formData.checkOutDate,
       nights, note: formData.note, updatedAt: Timestamp.now(), updatedBy: user.uid,
-      // Save new fields
       licensePlate: formData.licensePlate || '', idCard: formData.idCard || '', lineId: formData.lineId || '', dob: formData.dob || ''
     };
 
@@ -922,8 +721,6 @@ export default function App() {
       if (!formData.id) { 
         const depositDocNo = generateSequentialDocNo('BK', formData.checkInDate, bookings);
         const roomsToBook = [selectedRoom.id, ...formData.selectedAdditionalRooms];
-        
-        // Calculate average deposit per room
         const totalDeposit = Number(formData.deposit) || 0;
         const depositPerRoom = roomsToBook.length > 0 ? Math.floor(totalDeposit / roomsToBook.length) : 0;
 
@@ -932,7 +729,7 @@ export default function App() {
             return addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'bookings'), {
                 ...commonData, roomId: rConfig.id, roomName: rConfig.name, roomPrice: rConfig.price,
                 totalPrice: rConfig.price * nights, 
-                deposit: depositPerRoom, // Distributed deposit
+                deposit: depositPerRoom,
                 docNo: depositDocNo, checkInDocNo: '', status: 'booked', createdAt: Timestamp.now(),
                 keyDeposit: 0, extraBedPrice: 0, totalPaid: 0, paymentMethod: 'เงินสด'
             });
@@ -950,6 +747,7 @@ export default function App() {
         setIsBookingSummaryOpen(true);
         setIsBookingModalOpen(false);
       } else {
+         // ✅ BUG FIX 5: Add new rooms to group if any selected
          const roomsToBook = [...formData.selectedAdditionalRooms];
          if(roomsToBook.length > 0) {
              const depositDocNo = formData.docNo;
@@ -964,9 +762,32 @@ export default function App() {
              });
              await Promise.all(batchPromises);
          }
+
+         // อัปเดตห้องหลัก
          await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', formData.id), {
              ...commonData, roomPrice: Number(formData.roomPrice), totalPrice: Number(formData.roomPrice) * nights, deposit: Number(formData.deposit)
          });
+
+         // ✅ BUG FIX 5: Sync guest info and dates to all sibling rooms in the group
+         const siblingIds = formData.groupCheckInRooms.filter(id => id !== formData.id);
+         if (siblingIds.length > 0) {
+             const siblingUpdates = siblingIds.map(id =>
+                 updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', id), {
+                     guestName: formData.guestName,
+                     phone: formData.phone,
+                     checkInDate: formData.checkInDate,
+                     checkOutDate: formData.checkOutDate,
+                     nights,
+                     note: formData.note,
+                     licensePlate: formData.licensePlate || '',
+                     idCard: formData.idCard || '',
+                     lineId: formData.lineId || '',
+                     dob: formData.dob || '',
+                     updatedAt: Timestamp.now()
+                 })
+             );
+             await Promise.all(siblingUpdates);
+         }
          
          const summary = generateBookingSummary(
             formData.guestName,
@@ -978,9 +799,8 @@ export default function App() {
         );
         setBookingSummaryText(summary);
         setIsBookingSummaryOpen(true);
-
-         showNotification('อัปเดตข้อมูลการจองสำเร็จ');
-         setIsBookingModalOpen(false);
+        showNotification('อัปเดตข้อมูลการจองสำเร็จ');
+        setIsBookingModalOpen(false);
       }
     } catch (error) { console.error(error); showNotification('เกิดข้อผิดพลาด', 'error'); }
   };
@@ -989,99 +809,157 @@ export default function App() {
      if (!user) return;
      if (useMockData) { showNotification('โหมดตัวอย่าง: บันทึกข้อมูลสำเร็จ'); setIsCheckInModalOpen(false); return; }
 
+     const existingBooking = bookings.find(b => b.id === formData.id);
+     const isAlreadyCheckedOut = existingBooking?.status === 'checked-out';
+     const isAlreadyOccupied = existingBooking?.status === 'occupied';
      const newRcDocNo = formData.checkInDocNo || generateSequentialDocNo('RC', formatDate(new Date()), bookings);
      const paymentInHand = Number(formData.currentPayment);
-     
-     try {
-         const commonUpdate = {
-             licensePlate: formData.licensePlate || '',
-             idCard: formData.idCard || '',
-             lineId: formData.lineId || '',
-             dob: formData.dob || '',
-             guestName: formData.guestName,
-             phone: formData.phone
+     const commonUpdate = {
+         licensePlate: formData.licensePlate || '', idCard: formData.idCard || '',
+         lineId: formData.lineId || '', dob: formData.dob || '',
+         guestName: formData.guestName, phone: formData.phone
+     };
+
+     if (formData.groupCheckInRooms.length > 1) {
+         const allGroupBookings = bookings.filter(b => formData.groupCheckInRooms.includes(b.id));
+
+         const doGroupSave = async () => {
+             try {
+                 let remainingPool = allGroupBookings.reduce((sum, b) => sum + (b.totalPaid || 0), 0) + paymentInHand;
+                 const updates = allGroupBookings.map(b => {
+                     const nights = calculateNights(b.checkInDate, b.checkOutDate);
+                     const roomCost = b.roomPrice * nights;
+                     let allocated = 0;
+                     if (remainingPool >= roomCost) { allocated = roomCost; remainingPool -= roomCost; }
+                     else { allocated = remainingPool; remainingPool = 0; }
+                     return { id: b.id, allocated, isPrimary: b.id === formData.id, bStatus: b.status };
+                 });
+                 const primaryUpdate = updates.find(u => u.isPrimary);
+                 if (primaryUpdate) primaryUpdate.allocated += remainingPool;
+                 const batch = updates.map(u => {
+                     const targetBStatus = u.bStatus === 'checked-out' ? 'checked-out' : 'occupied';
+                     const bTimeUpdate = u.bStatus === 'booked' ? { checkInTime: Timestamp.now(), checkInTimeStr: formData.checkInTimeStr || getNowTimeStr() } : {};
+                     return updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', u.id), {
+                         ...commonUpdate, ...bTimeUpdate, status: targetBStatus, checkInDocNo: newRcDocNo,
+                         totalPaid: u.allocated, keyDeposit: u.isPrimary ? Number(formData.keyDeposit) : 0,
+                         extraBedPrice: u.isPrimary ? Number(formData.extraBedPrice) : 0,
+                         paymentMethod: formData.paymentMethod
+                     });
+                 });
+                 await Promise.all(batch);
+                 showNotification('บันทึกรายการเรียบร้อย');
+                 setIsCheckInModalOpen(false);
+             } catch(err) { console.error(err); showNotification('เกิดข้อผิดพลาด', 'error'); }
          };
 
-         if (formData.groupCheckInRooms.length > 1) {
-             const allGroupBookings = bookings.filter(b => formData.groupCheckInRooms.includes(b.id));
-             let remainingPool = allGroupBookings.reduce((sum, b) => sum + (b.totalPaid || 0), 0) + paymentInHand;
-             const updates = allGroupBookings.map(b => {
-                 const nights = calculateNights(b.checkInDate, b.checkOutDate);
-                 const roomCost = b.roomPrice * nights;
-                 let allocated = 0;
-                 if (remainingPool >= roomCost) { allocated = roomCost; remainingPool -= roomCost; } 
-                 else { allocated = remainingPool; remainingPool = 0; }
-                 return { id: b.id, allocated, isPrimary: b.id === formData.id };
+         // ✅ BUG FIX 4: Warn if payment pool is insufficient
+         const totalRequired = allGroupBookings.reduce((sum, b) => {
+             const n = calculateNights(b.checkInDate, b.checkOutDate);
+             return sum + (b.roomPrice * n);
+         }, 0) + Number(formData.extraBedPrice) + Number(formData.keyDeposit);
+         const totalCovered = allGroupBookings.reduce((sum, b) =>
+             sum + (b.deposit || 0) + (b.totalPaid || 0), 0) + paymentInHand;
+         if (totalCovered < totalRequired) {
+             const shortfall = (totalRequired - totalCovered).toLocaleString();
+             showConfirm({
+                 title: 'ยอดเงินยังไม่ครบ',
+                 message: `ยอดเงินรวมยังไม่ครบ ขาดอีก ${shortfall} บาท\nต้องการบันทึกต่อหรือไม่?`,
+                 confirmLabel: 'บันทึกต่อ',
+                 variant: 'warning',
+                 onConfirm: doGroupSave
              });
-             const primaryUpdate = updates.find(u => u.isPrimary);
-             if (primaryUpdate) primaryUpdate.allocated += remainingPool;
-             const batch = updates.map(u => updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', u.id), {
-                 ...commonUpdate,
-                 status: 'occupied', checkInTime: Timestamp.now(), checkInDocNo: newRcDocNo,
-                 totalPaid: u.allocated, keyDeposit: u.isPrimary ? Number(formData.keyDeposit) : 0, 
-                 extraBedPrice: u.isPrimary ? Number(formData.extraBedPrice) : 0,
-                 paymentMethod: formData.paymentMethod
-             }));
-             await Promise.all(batch);
-         } else {
-             const newTotalPaid = Number(formData.totalPaid) + paymentInHand;
-             await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', formData.id), {
-                 ...commonUpdate,
-                 status: 'occupied', checkInTime: Timestamp.now(), checkInDocNo: newRcDocNo,
-                 keyDeposit: Number(formData.keyDeposit), extraBedPrice: Number(formData.extraBedPrice),
-                 totalPaid: newTotalPaid, paymentMethod: formData.paymentMethod
-             });
+             return;
          }
-         showNotification(`บันทึกรายการเรียบร้อย`);
-         setIsCheckInModalOpen(false);
-     } catch(err) { console.error(err); showNotification('เกิดข้อผิดพลาด', 'error'); }
+         await doGroupSave();
+     } else {
+         try {
+             const newTotalPaid = Number(formData.totalPaid) + paymentInHand;
+             const targetStatus = isAlreadyCheckedOut ? 'checked-out' : 'occupied';
+             const timeUpdate = (!isAlreadyCheckedOut && !isAlreadyOccupied) ? { checkInTime: Timestamp.now(), checkInTimeStr: formData.checkInTimeStr || getNowTimeStr() } : {};
+             await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', formData.id), {
+                 ...commonUpdate, ...timeUpdate, status: targetStatus, checkInDocNo: newRcDocNo,
+                 keyDeposit: Number(formData.keyDeposit), extraBedPrice: Number(formData.extraBedPrice),
+                 totalPaid: newTotalPaid, paymentMethod: formData.paymentMethod,
+                 ...(formData.checkOutTimeStr ? { checkOutTimeStr: formData.checkOutTimeStr } : {})
+             });
+             showNotification('บันทึกรายการเรียบร้อย');
+             setIsCheckInModalOpen(false);
+         } catch(err) { console.error(err); showNotification('เกิดข้อผิดพลาด', 'error'); }
+     }
   };
 
-  const handleCheckout = async () => {
+  const handleCheckout = () => {
      if(!formData.id) return;
      if (useMockData) { showNotification('โหมดตัวอย่าง: เช็คเอาท์สำเร็จ'); setIsCheckInModalOpen(false); return; }
-     
      const today = formatDate(new Date());
      const originalCheckout = formData.checkOutDate;
      const earlyCheckout = today < originalCheckout && today >= formData.checkInDate;
-     
+
+     const doCheckout = async (adjustedNights = null, adjustedPrice = null) => {
+         try {
+             const payload = { status: 'checked-out', checkOutTime: Timestamp.now(), checkOutTimeStr: getNowTimeStr(), keyDepositReturned: true };
+             if (adjustedNights) { payload.checkOutDate = today; payload.nights = adjustedNights; payload.totalPrice = adjustedPrice; }
+             await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', formData.id), payload);
+             setIsCheckInModalOpen(false);
+             showNotification(adjustedNights ? "เช็คเอาท์และปรับปรุงยอดเงินเรียบร้อย ✅" : "เช็คเอาท์เรียบร้อย ✅");
+         } catch(e) { showNotification('เกิดข้อผิดพลาด', 'error'); }
+     };
+
      if(earlyCheckout) {
          const newNights = calculateNights(formData.checkInDate, today);
          const actualNights = newNights > 0 ? newNights : 1;
          const newPrice = formData.roomPrice * actualNights;
-         if(confirm(`ลูกค้าคืนห้องก่อนกำหนด (${actualNights} คืน)\nต้องการปรับปรุงยอดเงินค่าห้องเป็น ${newPrice.toLocaleString()} บาท หรือไม่?`)) {
-             try {
-                 await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', formData.id), {
-                     checkOutDate: today, nights: actualNights, totalPrice: newPrice,
-                     status: 'checked-out', checkOutTime: Timestamp.now(), keyDepositReturned: true
-                 });
-                 setIsCheckInModalOpen(false); showNotification("เช็คเอาท์และปรับปรุงยอดเงินเรียบร้อย ✅"); return;
-             } catch(e) { showNotification('เกิดข้อผิดพลาด', 'error'); return; }
-         }
+         showConfirm({
+             title: 'คืนห้องก่อนกำหนด',
+             message: `ลูกค้าคืนห้องก่อนกำหนด (${actualNights} คืน)\nต้องการปรับยอดค่าห้องเป็น ${newPrice.toLocaleString()} บาท หรือไม่?`,
+             confirmLabel: 'ปรับยอดและเช็คเอาท์',
+             cancelLabel: 'เช็คเอาท์ราคาเดิม',
+             variant: 'warning',
+             onConfirm: () => doCheckout(actualNights, newPrice)
+         });
+         return;
      }
-     if(!confirm(`คืนมัดจำกุญแจ ${formData.keyDeposit} บาท แล้ว?\n\nยืนยันเช็คเอาท์?`)) return;
-     try {
-        await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', formData.id), { status: 'checked-out', checkOutTime: Timestamp.now(), keyDepositReturned: true });
-        setIsCheckInModalOpen(false); showNotification("เช็คเอาท์เรียบร้อย ✅");
-     } catch (error) { showNotification("เกิดข้อผิดพลาด", "error"); }
+
+     const keyDep = Number(formData.keyDeposit);
+     showConfirm({
+         title: 'ยืนยันเช็คเอาท์',
+         message: keyDep > 0 ? `คืนมัดจำกุญแจ ${keyDep.toLocaleString()} บาท แล้ว?\n\nยืนยันเช็คเอาท์?` : 'ยืนยันเช็คเอาท์?',
+         confirmLabel: 'เช็คเอาท์',
+         variant: 'default',
+         onConfirm: () => doCheckout()
+     });
   };
 
-  const handleCheckoutSingle = async (bid, keyDep) => {
-     if(!confirm(`ยืนยันเช็คเอาท์ห้องนี้? ${keyDep > 0 ? `(อย่าลืมคืนมัดจำ ${keyDep} บาท)` : ''}`)) return;
-     if (useMockData) { showNotification('โหมดตัวอย่าง: เช็คเอาท์สำเร็จ'); return; }
-     try {
-        await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', bid), { status: 'checked-out', checkOutTime: Timestamp.now(), keyDepositReturned: true });
-        showNotification("เช็คเอาท์เรียบร้อย ✅");
-     } catch (error) { showNotification("เกิดข้อผิดพลาด", "error"); }
+  const handleCheckoutSingle = (bid, keyDep) => {
+     showConfirm({
+         title: 'ยืนยันเช็คเอาท์',
+         message: `ยืนยันเช็คเอาท์ห้องนี้?${keyDep > 0 ? `\n(อย่าลืมคืนมัดจำ ${keyDep} บาท)` : ''}`,
+         confirmLabel: 'เช็คเอาท์',
+         variant: 'default',
+         onConfirm: async () => {
+             if (useMockData) { showNotification('โหมดตัวอย่าง: เช็คเอาท์สำเร็จ'); return; }
+             try {
+                 await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', bid), { status: 'checked-out', checkOutTime: Timestamp.now(), checkOutTimeStr: getNowTimeStr(), keyDepositReturned: true });
+                 showNotification("เช็คเอาท์เรียบร้อย ✅");
+             } catch (error) { showNotification("เกิดข้อผิดพลาด", "error"); }
+         }
+     });
   };
 
-  const handleDeleteBooking = async () => {
-      if(!confirm('ต้องการยกเลิกการจองนี้หรือไม่?')) return;
-      if (useMockData) { showNotification('โหมดตัวอย่าง: ยกเลิกสำเร็จ'); setIsBookingModalOpen(false); return; }
-      try {
-          await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', formData.id));
-          setIsBookingModalOpen(false); showNotification("ยกเลิกการจองสำเร็จ");
-      } catch (error) { showNotification("เกิดข้อผิดพลาด", "error"); }
+  const handleDeleteBooking = () => {
+      showConfirm({
+          title: 'ยกเลิกการจอง',
+          message: 'ต้องการยกเลิกการจองนี้หรือไม่?\nข้อมูลจะถูกลบถาวร',
+          confirmLabel: 'ยกเลิกการจอง',
+          variant: 'danger',
+          onConfirm: async () => {
+              if (useMockData) { showNotification('โหมดตัวอย่าง: ยกเลิกสำเร็จ'); setIsBookingModalOpen(false); return; }
+              try {
+                  await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', formData.id));
+                  setIsBookingModalOpen(false); showNotification("ยกเลิกการจองสำเร็จ");
+              } catch (error) { showNotification("เกิดข้อผิดพลาด", "error"); }
+          }
+      });
   };
 
   const goToCheckIn = () => {
@@ -1089,17 +967,56 @@ export default function App() {
       setTimeout(() => setIsCheckInModalOpen(true), 100);
   };
 
+  const openTempModal = (room) => {
+      setTempRoom(room);
+      setTempForm({ guestName: '', price: room.price, durationHours: 3, paymentMethod: 'เงินสด', keyDepositCollected: false });
+      setIsTempModalOpen(true);
+  };
+
+  const handleTempCheckIn = async () => {
+      if (!tempRoom) return;
+      if (useMockData) {
+          const now = new Date();
+          const out = new Date(now.getTime() + tempForm.durationHours * 3600000);
+          showNotification(`เช็คอินชั่วคราว ออก ${out.toTimeString().slice(0,5)} น.`);
+          setIsTempModalOpen(false); return;
+      }
+      const now = new Date();
+      const checkInTimeStr = now.toTimeString().slice(0,5);
+      const checkOutDT = new Date(now.getTime() + tempForm.durationHours * 3600000);
+      const scheduledCheckOutTimeStr = checkOutDT.toTimeString().slice(0,5);
+      const checkInDate = formatDate(now);
+      const checkOutDate = formatDate(checkOutDT);
+      try {
+          await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'bookings'), {
+              roomId: tempRoom.id, roomName: tempRoom.name,
+              guestName: tempForm.guestName || 'ลูกค้าชั่วคราว',
+              checkInDate, checkOutDate,
+              checkInTimeStr, scheduledCheckOutTimeStr,
+              durationHours: tempForm.durationHours,
+              totalPrice: tempForm.price, totalPaid: tempForm.price,
+              deposit: 0, keyDeposit: tempForm.keyDepositCollected ? 100 : 0,
+              extraBedPrice: 0, paymentMethod: tempForm.paymentMethod,
+              status: 'temporary', nights: 0, roomPrice: tempRoom.price,
+              docNo: generateSequentialDocNo('TM', checkInDate, bookings),
+              checkInTime: Timestamp.now(), createdAt: Timestamp.now(), updatedAt: Timestamp.now(),
+          });
+          showNotification(`เช็คอินชั่วคราว — ออก ${scheduledCheckOutTimeStr} น.`);
+          setIsTempModalOpen(false); setTempRoom(null);
+      } catch(e) { console.error(e); showNotification('เกิดข้อผิดพลาด', 'error'); }
+  };
+
   const openExpenseModal = (expense = null) => {
      if (expense) { setExpenseModalMode('edit'); setExpenseForm({ ...initialExpenseForm, ...expense, amount: expense.amount, customCategory: '' }); } 
      else { setExpenseModalMode('create'); setExpenseForm({ ...initialExpenseForm, docNo: '', customCategory: '' }); }
      setIsExpenseModalOpen(true);
   };
+
   const handleExpenseSubmit = async (e) => {
     e.preventDefault(); if (!user) return;
     const finalCategory = expenseForm.category === 'เพิ่มหมวดหมู่ใหม่...' ? expenseForm.customCategory : expenseForm.category;
     if (!finalCategory) return alert('ระบุหมวดหมู่');
     if (useMockData) { showNotification('โหมดตัวอย่าง: บันทึกรายจ่ายสำเร็จ'); setIsExpenseModalOpen(false); return; }
-
     const payload = { ...expenseForm, amount: Number(expenseForm.amount), category: finalCategory, updatedAt: Timestamp.now(), updatedBy: user.uid };
     delete payload.customCategory; 
     try {
@@ -1111,20 +1028,38 @@ export default function App() {
       setIsExpenseModalOpen(false);
     } catch (e) {}
   };
-  const handleDeleteExpense = async () => { if(confirm('ลบ?')) { if(useMockData){ showNotification('ลบสำเร็จ (ตัวอย่าง)'); setIsExpenseModalOpen(false); return;} await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'expenses', expenseForm.id)); setIsExpenseModalOpen(false); } };
 
-  // Report Logic
+  const handleDeleteExpense = () => {
+    showConfirm({
+        title: 'ลบรายจ่าย',
+        message: 'ต้องการลบรายการนี้หรือไม่?',
+        confirmLabel: 'ลบ',
+        variant: 'danger',
+        onConfirm: async () => {
+            if(useMockData){ showNotification('ลบสำเร็จ (ตัวอย่าง)'); setIsExpenseModalOpen(false); return; }
+            try {
+                await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'expenses', expenseForm.id));
+                setIsExpenseModalOpen(false);
+                showNotification('ลบรายจ่ายสำเร็จ');
+            } catch(e) { showNotification('เกิดข้อผิดพลาด', 'error'); }
+        }
+    });
+  };
+
+  // ✅ BUG FIX 3: Report Logic — roomRevenue now accumulates from daily loop (consistent with line chart)
+  // and reportBookings counts pro-rated revenue for cross-month bookings
   const reportData = useMemo(() => {
     const targetMonth = reportMonth;
-    if (!targetMonth) return { monthlyRevenue: 0, monthlyExpense: 0, netProfit: 0, lineData: [], roomPieData: [], expensePieData: [], reportBookings: [], reportExpenses: [] };
+    if (!targetMonth) return { monthlyRevenue: 0, monthlyCash: 0, monthlyTransfer: 0, monthlyExpense: 0, netProfit: 0, lineData: [], roomPieData: [], expensePieData: [], reportBookings: [], reportExpenses: [] };
     
     const dailyRevenue = {};
     const year = parseInt(targetMonth.split('-')[0]);
     const month = parseInt(targetMonth.split('-')[1]);
     const daysInMonth = new Date(year, month, 0).getDate();
     
-    for (let i = 1; i <= daysInMonth; i++) dailyRevenue[`${targetMonth}-${String(i).padStart(2, '0')}`] = 0;
-    let monthlyRevenue = 0, monthlyExpense = 0;
+    for (let i = 1; i <= daysInMonth; i++) dailyRevenue[`${targetMonth}-${String(i).padStart(2, '0')}`] = { revenue: 0, cash: 0, transfer: 0 };
+    let monthlyRevenue = 0, monthlyCash = 0, monthlyTransfer = 0, monthlyExpense = 0;
+    // ✅ roomRevenue now built inside daily loop so cross-month bookings are counted correctly
     const roomRevenue = {}, reportBookings = [], reportExpenses = [], expenseCats = {};
 
     Object.keys(dailyRevenue).forEach(dayDate => {
@@ -1134,42 +1069,137 @@ export default function App() {
                     const totalRoomRev = (b.totalPrice || 0) + (b.extraBedPrice || 0);
                     const nights = b.nights || 1;
                     const dailyAvg = totalRoomRev / nights;
-                    dailyRevenue[dayDate] += dailyAvg;
+                    
+                    dailyRevenue[dayDate].revenue += dailyAvg;
+                    if (b.paymentMethod === 'เงินโอน') {
+                        dailyRevenue[dayDate].transfer += dailyAvg;
+                    } else {
+                        dailyRevenue[dayDate].cash += dailyAvg;
+                    }
+                    // ✅ Accumulate roomRevenue daily — handles cross-month bookings correctly
+                    roomRevenue[b.roomName] = (roomRevenue[b.roomName] || 0) + dailyAvg;
                 }
             }
         });
-        monthlyRevenue += dailyRevenue[dayDate];
+        monthlyRevenue += dailyRevenue[dayDate].revenue;
+        monthlyCash += dailyRevenue[dayDate].cash;
+        monthlyTransfer += dailyRevenue[dayDate].transfer;
     });
 
+    // ✅ reportBookings: count bookings that overlap with this month (not just startsWith)
+    const monthStart = `${targetMonth}-01`;
+    const monthEnd = `${targetMonth}-${String(daysInMonth).padStart(2, '0')}`;
     bookings.forEach(b => {
-       if (b.checkInDate && b.checkInDate.startsWith(targetMonth) && (b.status === 'occupied' || b.status === 'checked-out')) {
-           const revenue = (b.totalPrice || 0) + (b.extraBedPrice || 0);
-           roomRevenue[b.roomName] = (roomRevenue[b.roomName] || 0) + revenue;
-           reportBookings.push({ Type: 'รายได้', DocNo: b.checkInDocNo || b.docNo, Date: b.checkInDate, Room: b.roomName, Customer: b.guestName, Amount: revenue });
+       if ((b.status === 'occupied' || b.status === 'checked-out') &&
+           b.checkInDate <= monthEnd && b.checkOutDate > monthStart) {
+           const totalRoomRev = (b.totalPrice || 0) + (b.extraBedPrice || 0);
+           const nights = b.nights || 1;
+           const dailyRate = totalRoomRev / nights;
+           // Pro-rate: count only nights that fall within this month
+           const effectiveStart = b.checkInDate > monthStart ? b.checkInDate : monthStart;
+           const effectiveEnd = b.checkOutDate <= addDays(monthEnd, 1) ? b.checkOutDate : addDays(monthEnd, 1);
+           const nightsInMonth = Math.max(calculateNights(effectiveStart, effectiveEnd), 0);
+           const proRatedRevenue = Math.round(dailyRate * nightsInMonth);
+           reportBookings.push({ 
+               Type: 'รายได้', DocNo: b.checkInDocNo || b.docNo, 
+               CheckIn: b.checkInDate, CheckOut: b.checkOutDate,
+               Room: b.roomName, Customer: b.guestName, Amount: proRatedRevenue 
+           });
        }
     });
 
     expenses.forEach(ex => { if(ex.date && ex.date.startsWith(targetMonth)) { monthlyExpense += ex.amount; reportExpenses.push({ ...ex }); expenseCats[ex.category] = (expenseCats[ex.category] || 0) + ex.amount; }});
     
-    reportBookings.sort((a, b) => a.Date.localeCompare(b.Date));
+    reportBookings.sort((a, b) => a.CheckIn.localeCompare(b.CheckIn));
     reportExpenses.sort((a, b) => a.date.localeCompare(b.date));
 
-    const roomPieData = Object.keys(roomRevenue).map(name => ({ name, value: roomRevenue[name] })).sort((a, b) => b.value - a.value);
+    const roomPieData = Object.keys(roomRevenue).map(name => ({ name, value: Math.round(roomRevenue[name]) })).sort((a, b) => b.value - a.value);
     roomPieData.forEach(item => {
         let nights = 0;
         bookings.forEach(b => {
-            if(b.roomName === item.name && b.checkInDate.startsWith(targetMonth) && (b.status === 'occupied' || b.status === 'checked-out')) nights += (b.nights || 0);
+            if(b.roomName === item.name && (b.status === 'occupied' || b.status === 'checked-out')) {
+                // Count nights overlapping this month
+                if (b.checkInDate <= monthEnd && b.checkOutDate > monthStart) {
+                    const effectiveStart = b.checkInDate > monthStart ? b.checkInDate : monthStart;
+                    const effectiveEnd = b.checkOutDate <= addDays(monthEnd, 1) ? b.checkOutDate : addDays(monthEnd, 1);
+                    nights += Math.max(calculateNights(effectiveStart, effectiveEnd), 0);
+                }
+            }
         });
         item.totalNights = nights;
     });
 
     return { 
-        monthlyRevenue, monthlyExpense, netProfit: monthlyRevenue - monthlyExpense, 
-        lineData: Object.keys(dailyRevenue).sort().map(date => ({ date: date.split('-')[2], revenue: dailyRevenue[date] })),
+        monthlyRevenue, monthlyCash, monthlyTransfer, monthlyExpense, netProfit: monthlyRevenue - monthlyExpense, 
+        lineData: Object.keys(dailyRevenue).sort().map(date => ({ 
+            date: date.split('-')[2], 
+            revenue: dailyRevenue[date].revenue,
+            cash: dailyRevenue[date].cash,
+            transfer: dailyRevenue[date].transfer
+        })),
         roomPieData,
         expensePieData: Object.keys(expenseCats).map(name => ({ name, value: expenseCats[name] })), 
         reportBookings, reportExpenses 
     };
+  }, [bookings, expenses, reportMonth]);
+
+  const weeklyBreakdown = useMemo(() => {
+    const weeks = [[], [], [], []];
+    reportData.lineData.forEach((d) => {
+      const dayNum = parseInt(d.date);
+      const weekIdx = Math.min(Math.floor((dayNum - 1) / 7), 3);
+      weeks[weekIdx].push({ ...d, dayNum });
+    });
+    return weeks;
+  }, [reportData.lineData]);
+
+  const monthHistorySummary = useMemo(() => {
+    const thaiMonthNames = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
+    const computeMonth = (monthKey) => {
+      const [y, m] = monthKey.split('-').map(Number);
+      const dim = new Date(y, m, 0).getDate();
+      const mStart = `${monthKey}-01`;
+      const mEnd = `${monthKey}-${String(dim).padStart(2,'0')}`;
+      let income = 0;
+      bookings.forEach(b => {
+        if ((b.status === 'occupied' || b.status === 'checked-out') &&
+            b.checkInDate <= mEnd && b.checkOutDate > mStart) {
+          const rev = (b.totalPrice || 0) + (b.extraBedPrice || 0);
+          const n = b.nights || 1;
+          const daily = rev / n;
+          const effStart = b.checkInDate > mStart ? b.checkInDate : mStart;
+          const effEnd = b.checkOutDate <= addDays(mEnd, 1) ? b.checkOutDate : addDays(mEnd, 1);
+          const nightsIn = Math.max(calculateNights(effStart, effEnd), 0);
+          income += Math.round(daily * nightsIn);
+        }
+      });
+      let expense = 0;
+      expenses.forEach(ex => { if (ex.date && ex.date.startsWith(monthKey)) expense += ex.amount; });
+      return { income, expense };
+    };
+    const results = [];
+    for (let i = 5; i >= 0; i--) {
+      const base = new Date(reportMonth + '-01');
+      base.setMonth(base.getMonth() - i);
+      const curKey = formatDate(base).slice(0,7);
+      const prevBase = new Date(base);
+      prevBase.setFullYear(prevBase.getFullYear() - 1);
+      const prevKey = formatDate(prevBase).slice(0,7);
+      const cur = computeMonth(curKey);
+      const prev = computeMonth(prevKey);
+      const cm = parseInt(curKey.split('-')[1]);
+      const cy = parseInt(curKey.split('-')[0]);
+      results.push({
+        monthKey: curKey,
+        label: `${thaiMonthNames[cm-1]} ${(cy+543).toString().slice(-2)}`,
+        shortLabel: thaiMonthNames[cm-1],
+        income: cur.income,
+        expense: cur.expense,
+        profit: cur.income - cur.expense,
+        prevIncome: prev.income,
+      });
+    }
+    return results;
   }, [bookings, expenses, reportMonth]);
 
   const dailyDetails = useMemo(() => {
@@ -1181,7 +1211,7 @@ export default function App() {
                   const totalRoomRev = (b.totalPrice || 0) + (b.extraBedPrice || 0);
                   const nights = b.nights || 1;
                   const dailyAvg = totalRoomRev / nights;
-                  details.push({ room: b.roomName, guest: b.guestName, amount: dailyAvg });
+                  details.push({ room: b.roomName, guest: b.guestName, amount: dailyAvg, paymentMethod: b.paymentMethod || 'เงินสด' });
               }
           }
       });
@@ -1223,6 +1253,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-100 text-slate-800 pb-28 md:pb-20 font-sans">
       {notification && <div className={`fixed top-6 right-6 px-6 py-4 rounded-2xl shadow-xl z-[70] text-white font-medium flex items-center gap-2 animate-fade-in ${notification.type === 'error' ? 'bg-red-500' : 'bg-emerald-600'}`}>{notification.type === 'error' ? <AlertCircle size={20}/> : <CheckCircle size={20}/>} {notification.message}</div>}
+      <ConfirmModal dialog={confirmDialog} onClose={() => setConfirmDialog(null)} />
 
       <header className="bg-white/95 backdrop-blur-md text-emerald-900 shadow-sm sticky top-0 z-40 border-b border-white">
         <div className="container mx-auto px-4 md:px-6 py-3 flex justify-between items-center relative">
@@ -1237,7 +1268,6 @@ export default function App() {
               </div>
           </div>
           
-          {/* Desktop Menu */}
           <div className="hidden md:flex items-center gap-3">
               {role === 'owner' && (
                   <div className="flex bg-slate-100/80 p-1 rounded-2xl gap-1">
@@ -1249,8 +1279,20 @@ export default function App() {
                   </div>
               )}
               {role === 'staff' && (
-                  <div className="bg-emerald-50 px-4 py-2 rounded-xl text-emerald-700 font-bold text-sm border border-emerald-100">
-                      โหมดใช้งานง่าย (Walk-in)
+                  <div className="flex items-center gap-2">
+                      {selectedStaffRooms.length > 0 ? (
+                          <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 p-1.5 rounded-xl animate-fade-in shadow-sm">
+                              <span className="font-black text-emerald-700 px-2 text-sm">{selectedStaffRooms.length} ห้อง</span>
+                              <button onClick={() => handleStaffBulkAction('checkin')} className="bg-emerald-600 text-white px-3 py-1.5 rounded-lg font-bold shadow-md hover:bg-emerald-700 active:scale-95 transition-all flex items-center gap-1 text-sm"><LogIn size={16}/> เช็คอิน</button>
+                              <button onClick={() => { if(selectedStaffRooms.length === 1){ const r = rooms.find(x => x.id === selectedStaffRooms[0]); if(r){ openTempModal(r); setSelectedStaffRooms([]); } } else showNotification('เลือก 1 ห้องสำหรับลูกค้าชั่วคราว', 'error'); }} className="bg-amber-500 text-white px-3 py-1.5 rounded-lg font-bold shadow-md hover:bg-amber-600 active:scale-95 transition-all flex items-center gap-1 text-sm"><Clock size={16}/> ชม.</button>
+                              <button onClick={() => handleStaffBulkAction('checkout')} className="bg-white border border-red-200 text-red-600 px-3 py-1.5 rounded-lg font-bold hover:bg-red-50 active:scale-95 transition-all flex items-center gap-1 text-sm"><LogOut size={16}/> คืนห้อง</button>
+                              <button onClick={() => setSelectedStaffRooms([])} className="p-1 text-slate-400 hover:text-slate-600 bg-white rounded-full shadow-sm"><X size={16}/></button>
+                          </div>
+                      ) : (
+                          <div className="bg-emerald-50 px-4 py-2 rounded-xl text-emerald-700 font-bold text-sm border border-emerald-100">
+                              โหมดใช้งานง่าย (Walk-in)
+                          </div>
+                      )}
                   </div>
               )}
               <div className="h-8 w-[1px] bg-slate-200 mx-2"></div>
@@ -1258,13 +1300,22 @@ export default function App() {
               <button onClick={() => setRole(null)} className="p-3 bg-red-50 text-red-500 rounded-xl hover:bg-red-100 hover:text-red-600 transition-colors shadow-sm"><LogOut size={18}/></button>
           </div>
 
-          {/* Mobile Menu Button */}
-          <button onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)} className="md:hidden p-2.5 bg-white border border-slate-200 rounded-xl text-slate-600 hover:text-emerald-600 shadow-sm active:scale-95 transition-all">
-            {isMobileMenuOpen ? <X size={22}/> : <Menu size={22}/>}
-          </button>
+          <div className="flex md:hidden items-center gap-2">
+              {role === 'staff' && selectedStaffRooms.length > 0 && (
+                  <div className="flex items-center gap-1 bg-emerald-50 border border-emerald-200 p-1 rounded-xl animate-fade-in shadow-sm">
+                      <span className="font-black text-emerald-700 px-2 text-sm">{selectedStaffRooms.length}</span>
+                      <button onClick={() => handleStaffBulkAction('checkin')} className="bg-emerald-600 text-white px-2.5 py-1.5 rounded-lg font-bold shadow-md hover:bg-emerald-700 active:scale-95 transition-all flex items-center text-xs gap-1"><LogIn size={14}/> เข้า</button>
+                      <button onClick={() => { if(selectedStaffRooms.length === 1){ const r = rooms.find(x => x.id === selectedStaffRooms[0]); if(r){ openTempModal(r); setSelectedStaffRooms([]); } } else showNotification('เลือก 1 ห้อง', 'error'); }} className="bg-amber-500 text-white px-2.5 py-1.5 rounded-lg font-bold hover:bg-amber-600 active:scale-95 transition-all flex items-center text-xs gap-1"><Clock size={14}/> ชม.</button>
+                      <button onClick={() => handleStaffBulkAction('checkout')} className="bg-white border border-red-200 text-red-600 px-2.5 py-1.5 rounded-lg font-bold hover:bg-red-50 active:scale-95 transition-all flex items-center text-xs gap-1"><LogOut size={14}/> ออก</button>
+                      <button onClick={() => setSelectedStaffRooms([])} className="p-1 text-slate-400 hover:text-slate-600 bg-white rounded-full shadow-sm"><X size={14}/></button>
+                  </div>
+              )}
+              <button onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)} className="p-2.5 bg-white border border-slate-200 rounded-xl text-slate-600 hover:text-emerald-600 shadow-sm active:scale-95 transition-all">
+                {isMobileMenuOpen ? <X size={22}/> : <Menu size={22}/>}
+              </button>
+          </div>
         </div>
 
-        {/* Mobile Dropdown Menu */}
         {isMobileMenuOpen && (
             <div className="md:hidden absolute top-full left-0 w-full bg-white/95 backdrop-blur-lg border-t border-slate-100 shadow-xl py-4 px-6 flex flex-col gap-2 z-50 animate-fade-in">
                 <button onClick={() => {setCurrentView('dashboard'); setIsMobileMenuOpen(false);}} className={`p-4 rounded-xl text-lg font-bold flex items-center gap-3 ${currentView === 'dashboard' ? 'bg-emerald-50 text-emerald-600' : 'text-slate-500'}`}><Calendar size={24} /> หน้าหลัก</button>
@@ -1286,7 +1337,6 @@ export default function App() {
       <div className="container mx-auto p-3 md:p-6">
         {currentView === 'dashboard' && (
           <div className="space-y-6 animate-fade-in relative">
-            {/* Stats Cards - Show in Staff Mode too */}
              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 md:gap-6">
                 <div className="bg-white p-5 md:p-6 rounded-3xl shadow-sm border border-slate-200 flex flex-col items-center justify-center relative overflow-hidden group hover:shadow-md transition-shadow">
                     <p className="text-slate-400 text-xs font-bold uppercase tracking-widest mb-1 z-10">ห้องทั้งหมด</p>
@@ -1306,7 +1356,6 @@ export default function App() {
                 </div>
             </div>
 
-            {/* Controls */}
             <div className="bg-white/80 backdrop-blur rounded-2xl p-2 flex justify-between items-center gap-2 shadow-sm border border-white">
                <div className="flex items-center gap-2 bg-white px-3 py-2 rounded-xl shadow-inner border border-slate-100 flex-1 justify-center">
                   <button onClick={() => {const d = new Date(selectedDate); d.setDate(d.getDate() - 1); setSelectedDate(formatDate(d));}} className="p-1.5 hover:bg-slate-100 rounded-full text-slate-400 hover:text-emerald-600 transition-colors">◀</button>
@@ -1316,79 +1365,80 @@ export default function App() {
                {role === 'owner' && <button onClick={openLineReport} className="bg-[#06C755] text-white px-4 py-2.5 rounded-xl shadow-lg shadow-green-100 text-sm font-bold flex items-center justify-center gap-1 hover:bg-[#05b54d] transition-transform transform active:scale-95"><MessageSquare size={18}/><span className="hidden md:inline"> สรุป LINE</span></button>}
             </div>
 
-            {/* Room Grid */}
-            <div className={`grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 md:gap-6 ${role === 'staff' ? 'pb-32' : ''}`}>
+            <div className={`grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 md:gap-6 ${role === 'staff' ? 'pb-10' : ''}`}>
               {rooms.map((room) => {
-                const { status, booking } = checkRoomStatus(room.id, selectedDate, true);
-                
-                // --- Styling Logic ---
+                const { status, booking } = checkRoomStatus(room.id, selectedDate, false);
                 let cardClass = "bg-white border-2 border-white hover:border-emerald-300 shadow-sm";
                 let statusColor = "bg-slate-100 text-slate-500"; let statusLabel = "ว่าง";
                 let icon = <Plus size={28} className="text-slate-300 group-hover:text-emerald-500 transition-colors"/>;
-                
                 const isOverstay = status === 'occupied' && new Date(selectedDate) >= new Date(booking?.checkOutDate) && selectedDate !== booking?.checkOutDate;
                 let remainingAmount = 0;
-                
                 if (status === 'occupied') {
                       const nights = booking.nights || 1;
                       const totalCost = (booking.roomPrice * nights) + (booking.extraBedPrice || 0) + (booking.keyDeposit || 0);
                       const totalPaid = (booking.totalPaid || 0) + (booking.deposit || 0);
                       remainingAmount = totalCost - totalPaid;
                 }
-
                 if (status === 'booked') { cardClass = "bg-yellow-50 border-2 border-yellow-200 shadow-sm"; statusColor = "bg-yellow-200 text-yellow-800"; statusLabel = "จอง"; icon = <Calendar size={24} className="text-yellow-500"/>; }
                 if (status === 'occupied') { cardClass = "bg-blue-50 border-2 border-blue-200 shadow-sm"; statusColor = "bg-blue-200 text-blue-800"; statusLabel = "พัก"; icon = <User size={24} className="text-blue-500"/>; }
-                if (status === 'checked-out') { cardClass = "bg-slate-200 border-2 border-slate-300 opacity-80 grayscale"; statusColor = "bg-slate-300 text-slate-600"; statusLabel = "ออกแล้ว"; icon = <LogOut size={24} className="text-slate-500"/>; }
+                if (status === 'temporary') { cardClass = "bg-amber-50 border-2 border-amber-300 shadow-sm"; statusColor = "bg-amber-200 text-amber-800"; statusLabel = "ชั่วคราว"; icon = <Clock size={24} className="text-amber-500"/>; }
                 if (isOverstay) { cardClass = "bg-red-50 border-2 border-red-200 shadow-sm"; statusColor = "bg-red-200 text-red-800"; statusLabel = "เกิน"; icon = <AlertCircle size={24} className="text-red-500"/>; }
-
-                // --- Staff Selection Logic ---
                 const isSelected = selectedStaffRooms.includes(room.id);
                 if (role === 'staff') {
                     if (isSelected) {
                         cardClass = "bg-emerald-50 border-2 border-emerald-500 ring-2 ring-emerald-200 transform scale-95 transition-all shadow-md";
                     }
                 }
-
                 return (
-                  <div key={room.id} onClick={() => handleRoomClick(room, status, booking)} className={`relative p-4 md:p-6 rounded-3xl cursor-pointer transition-all h-44 md:h-56 flex flex-col justify-between group select-none ${cardClass}`}>
-                    
-                     {/* Staff Selection Checkbox UI - Top Left */}
-                    {role === 'staff' && (
-                        <div className={`absolute top-4 left-4 w-6 h-6 rounded-full border-2 flex items-center justify-center checkbox-wrapper z-10 ${isSelected ? 'bg-emerald-500 border-emerald-500 selected' : 'bg-white border-slate-200'}`}>
-                            {isSelected && <CheckSquare size={14} className="text-white"/>}
-                        </div>
+                  <div key={room.id} onClick={() => handleRoomClick(room, status, booking, 'dashboard')} className={`relative p-4 md:p-6 rounded-3xl cursor-pointer transition-all h-48 md:h-56 flex flex-col group select-none ${cardClass}`}>
+                    {/* ปุ่มชั่วคราว — เฉพาะ owner + ห้องว่าง */}
+                    {role === 'owner' && status === 'available' && (
+                        <button
+                            onClick={(e) => { e.stopPropagation(); openTempModal(room); }}
+                            className="absolute bottom-3 right-3 text-[10px] bg-amber-100 text-amber-700 px-2 py-1 rounded-full font-bold border border-amber-200 hover:bg-amber-200 transition-colors z-10"
+                        >ชั่วคราว</button>
                     )}
-
-                    <div className="flex justify-between items-start pl-6">
-                         {/* Name - moved right slightly to avoid checkbox */}
-                        <span className="font-extrabold text-xl md:text-2xl text-slate-800">{room.name}</span>
-                        {/* Status Label - Bottom Right positioned essentially via flex layout but consistent */}
-                    </div>
-                    
-                     <div className={`absolute top-4 right-4 px-2.5 py-1 rounded-lg text-[10px] md:text-xs font-black tracking-wider uppercase ${statusColor}`}>{statusLabel}</div>
-
-
-                    <div className="mt-2 flex flex-col items-center justify-center h-full">
-                      {status === 'available' || status === 'checked-out' ? (
+                    <div className="relative w-full mb-2 flex items-start justify-between min-h-[32px]">
+                         {role === 'staff' && (
+                             <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center checkbox-wrapper z-10 flex-shrink-0 ${isSelected ? 'bg-emerald-500 border-emerald-500 selected' : 'bg-white border-slate-200'}`}>
+                                 {isSelected && <CheckSquare size={14} className="text-white"/>}
+                             </div>
+                         )}
+                         <span className={`font-extrabold text-lg md:text-2xl text-slate-800 truncate flex-1 ${role === 'staff' ? 'pl-3' : ''}`}>{room.name}</span>
+                         <div className={`px-2 py-1 rounded-lg text-[10px] md:text-xs font-black tracking-wider uppercase z-10 flex-shrink-0 ${statusColor}`}>{statusLabel}</div>
+                     </div>
+                    <div className="flex-1 flex flex-col items-center justify-center">
+                      {status === 'available' ? (
                           <>
-                            {status === 'available' && (
-                                <div className="w-12 h-12 md:w-14 md:h-14 rounded-full bg-slate-50 flex items-center justify-center mb-1 group-hover:scale-110 transition-transform">
-                                    {icon}
-                                </div>
-                            )}
+                            <div className="w-12 h-12 md:w-14 md:h-14 rounded-full bg-slate-50 flex items-center justify-center mb-1 group-hover:scale-110 transition-transform">
+                                {icon}
+                            </div>
                             <span className="text-2xl md:text-3xl font-black text-slate-300 group-hover:text-emerald-600 transition-colors">{room.price}</span>
                           </>
                       ) : (
-                          <div className="text-center w-full space-y-1">
+                          <div className="text-center w-full space-y-1 flex flex-col items-center">
                             <div className="w-10 h-10 md:w-12 md:h-12 rounded-full bg-white/60 flex items-center justify-center mx-auto mb-1 shadow-sm backdrop-blur-sm">
                                 {icon}
                             </div>
-                            <p className="font-bold text-base md:text-lg text-slate-800 truncate px-2">{booking.guestName}</p>
+                            <p className="font-bold text-base md:text-lg text-slate-800 truncate px-2 w-full">{booking.guestName}</p>
                             {status === 'booked' && <p className="text-xs md:text-sm text-yellow-700 font-bold">มัดจำ: {Number(booking.deposit || 0).toLocaleString()}</p>}
                             {status === 'occupied' && (
                                 remainingAmount > 0 
-                                ? <p className="text-xs md:text-sm text-red-600 font-black bg-white/80 px-2 py-1 rounded-lg border border-red-100">ค้าง {remainingAmount.toLocaleString()}</p>
-                                : <p className="text-xs md:text-sm text-emerald-600 font-black flex items-center justify-center gap-1 bg-white/80 px-2 py-1 rounded-lg border border-emerald-100"><CheckCircle size={12}/> ครบแล้ว</p>
+                                ? <p className="text-[10px] md:text-xs text-red-600 font-black bg-white/80 px-2 py-0.5 rounded-lg border border-red-100">ค้าง {remainingAmount.toLocaleString()}</p>
+                                : <p className="text-[10px] md:text-xs text-emerald-600 font-black flex items-center justify-center gap-1 bg-white/80 px-2 py-0.5 rounded-lg border border-emerald-100"><CheckCircle size={10}/> ครบแล้ว</p>
+                            )}
+                            {status === 'temporary' && (
+                                <p className="text-[10px] md:text-xs text-amber-700 font-black bg-amber-100/80 px-2 py-0.5 rounded-lg border border-amber-200">
+                                    ออก {booking.scheduledCheckOutTimeStr || '?'} น.
+                                </p>
+                            )}
+                            {booking?.checkInTimeStr && status === 'occupied' && (
+                                <p className="text-[10px] text-blue-400 font-bold">เข้า {booking.checkInTimeStr} น.</p>
+                            )}
+                            {booking?.checkOutDate && (
+                                <p className="text-[10px] md:text-xs text-slate-500 font-bold bg-slate-100 px-2 py-1 rounded-md mt-1 border border-slate-200">
+                                    ออก: {booking.checkOutDate.split('-').reverse().join('/')}
+                                </p>
                             )}
                           </div>
                       )}
@@ -1397,27 +1447,6 @@ export default function App() {
                 );
               })}
             </div>
-
-            {/* Staff Floating Action Bar - Center Bottom */}
-            {role === 'staff' && selectedStaffRooms.length > 0 && (
-                <div className="fixed bottom-8 left-1/2 transform -translate-x-1/2 w-[90%] md:w-auto bg-white/95 backdrop-blur-xl p-3 rounded-[2rem] shadow-2xl border border-slate-100 flex items-center justify-between gap-3 z-[100] animate-slide-up ring-4 ring-slate-100/50">
-                    <div className="pl-4 font-black text-slate-700 whitespace-nowrap text-lg flex flex-col leading-tight">
-                        <span>เลือก</span>
-                        <span className="text-emerald-600">{selectedStaffRooms.length} ห้อง</span>
-                    </div>
-                    <div className="flex gap-2">
-                        <button onClick={() => handleStaffBulkAction('checkin')} className="bg-emerald-600 text-white px-6 py-3 rounded-2xl font-bold shadow-lg shadow-emerald-200 hover:bg-emerald-700 active:scale-95 transition-all flex items-center gap-2">
-                            <LogIn size={20}/> เช็คอิน
-                        </button>
-                        <button onClick={() => handleStaffBulkAction('checkout')} className="bg-white border-2 border-red-100 text-red-500 px-4 py-3 rounded-2xl font-bold hover:bg-red-50 active:scale-95 transition-all">
-                            <LogOut size={20}/>
-                        </button>
-                        <button onClick={() => setSelectedStaffRooms([])} className="p-3 bg-slate-100 rounded-full text-slate-400 hover:bg-slate-200 hover:text-slate-600 transition-colors">
-                            <X size={20}/>
-                        </button>
-                    </div>
-                </div>
-            )}
           </div>
         )}
 
@@ -1433,7 +1462,6 @@ export default function App() {
                 </div>
                 <div className="bg-white rounded-[1.5rem] shadow-sm border border-slate-200 overflow-x-auto custom-scrollbar p-6">
                     <div className="min-w-[1000px]">
-                        {/* Header Dates */}
                         <div className="timeline-grid mb-4 border-b border-slate-100 pb-2">
                             <div className="font-bold text-slate-400">ห้อง / วันที่</div>
                             {[...Array(14)].map((_, i) => {
@@ -1447,31 +1475,25 @@ export default function App() {
                                 );
                             })}
                         </div>
-                        {/* Room Rows */}
                         <div className="space-y-2">
                             {rooms.map(room => (
                                 <div key={room.id} className="timeline-grid items-center h-12 hover:bg-slate-50 rounded-lg transition-colors">
                                     <div className="font-bold text-slate-700 text-sm px-2">{room.name}</div>
                                     {[...Array(14)].map((_, i) => {
                                         const currentDate = addDays(timelineStartDate, i);
-                                        // Include checked-out bookings in timeline
                                         const { status, booking } = checkRoomStatus(room.id, currentDate, true);
-                                        
                                         const isStart = booking && booking.checkInDate === currentDate;
-                                        
                                         let bgClass = "bg-transparent";
                                         if (status === 'booked') bgClass = "bg-yellow-200 border-y border-yellow-300";
                                         if (status === 'occupied') bgClass = "bg-blue-200 border-y border-blue-300";
                                         if (status === 'checked-out') bgClass = "bg-slate-200 border-y border-slate-300 opacity-60"; 
-                                        
                                         let radiusClass = "";
                                         if (isStart) radiusClass = "rounded-l-md border-l";
                                         if (booking && booking.checkOutDate === addDays(currentDate, 1)) radiusClass += " rounded-r-md border-r";
-
                                         return (
                                             <div key={i} className="h-8 px-1 relative">
                                                 {status !== 'available' && (
-                                                    <div className={`w-full h-full ${bgClass} ${radiusClass} flex items-center overflow-hidden cursor-pointer transition-opacity hover:opacity-80`} title={`${booking.guestName} (${status})`} onClick={() => handleRoomClick(room, status, booking)}>
+                                                    <div className={`w-full h-full ${bgClass} ${radiusClass} flex items-center overflow-hidden cursor-pointer transition-opacity hover:opacity-80`} title={`${booking.guestName} (${status})`} onClick={() => handleRoomClick(room, status, booking, 'timeline')}>
                                                         {isStart && <span className="text-[10px] font-bold text-slate-800 whitespace-nowrap pl-2">{booking.guestName}</span>}
                                                     </div>
                                                 )}
@@ -1494,7 +1516,7 @@ export default function App() {
                         <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400" size={18}/>
                         <input 
                             type="text" 
-                            placeholder="ค้นหาชื่อ, เบอร์โทร, ทะเบียนรถ..." 
+                            placeholder="ค้นหาชื่อ, เบอร์โทร, ทะเบียนรถ, LINE ID..." 
                             className="w-full pl-10 pr-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none shadow-sm transition-all"
                             value={guestSearchTerm}
                             onChange={(e) => setGuestSearchTerm(e.target.value)}
@@ -1516,11 +1538,17 @@ export default function App() {
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-50 text-sm">
-                                {guestDirectory.filter(g => 
-                                    g.name.includes(guestSearchTerm) || 
-                                    g.phone.includes(guestSearchTerm) || 
-                                    (g.licensePlate && g.licensePlate.includes(guestSearchTerm))
-                                ).map((guest, idx) => (
+                                {/* ✅ BUG FIX 2: Case-insensitive search + LINE ID search */}
+                                {guestDirectory.filter(g => {
+                                    const term = guestSearchTerm.toLowerCase();
+                                    if (!term) return true;
+                                    return (
+                                        g.name.toLowerCase().includes(term) ||
+                                        (g.phone && g.phone.includes(term)) ||
+                                        (g.licensePlate && g.licensePlate.toLowerCase().includes(term)) ||
+                                        (g.lineId && g.lineId.toLowerCase().includes(term))
+                                    );
+                                }).map((guest, idx) => (
                                     <tr key={idx} className="hover:bg-slate-50/50 transition-colors">
                                         <td className="p-5 font-bold text-slate-700">{guest.name}</td>
                                         <td className="p-5 text-slate-600 font-mono">
@@ -1564,7 +1592,12 @@ export default function App() {
                 <table className="w-full text-sm text-left text-slate-600">
                     <thead className="bg-slate-50 text-slate-500 uppercase text-xs font-bold tracking-wider"><tr><th className="px-6 py-4">เอกสาร</th><th className="px-6 py-4">วันที่</th><th className="px-6 py-4">รายการ</th><th className="px-6 py-4">จ่ายให้</th><th className="px-6 py-4 text-right">จำนวนเงิน</th></tr></thead>
                     <tbody className="divide-y divide-slate-50">
-                        {expenses.sort((a,b) => b.docNo.localeCompare(a.docNo)).map(ex => (
+                        {/* ✅ BUG FIX 1: Safe sort — no crash if docNo is null */}
+                        {[...expenses].sort((a, b) => {
+                            const dateCompare = (b.date || '').localeCompare(a.date || '');
+                            if (dateCompare !== 0) return dateCompare;
+                            return (b.docNo || '').localeCompare(a.docNo || '');
+                        }).map(ex => (
                             <tr key={ex.id} className="hover:bg-slate-50/50 cursor-pointer transition-colors" onClick={() => openExpenseModal(ex)}>
                                 <td className="px-6 py-4 text-xs text-slate-400 font-mono">{ex.docNo || '-'}</td>
                                 <td className="px-6 py-4 font-medium">{ex.date}</td>
@@ -1580,71 +1613,345 @@ export default function App() {
         )}
 
         {currentView === 'report' && (
-           <div className="space-y-8 animate-fade-in">
-               <div className="bg-white p-8 rounded-[2rem] shadow-sm border border-slate-100">
-                  <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
-                      <div className="flex items-center gap-4">
+           <div className="space-y-6 animate-fade-in">
+               <div className="bg-white p-5 md:p-8 rounded-[2rem] shadow-sm border border-slate-100">
+
+                  {/* Header */}
+                  <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-3">
+                      <div className="flex items-center gap-3 flex-wrap">
                           <h2 className="text-2xl font-black text-slate-800 flex items-center gap-3"><BarChart2 className="text-emerald-500"/> ผลประกอบการ</h2>
-                          <input type="month" value={reportMonth} onChange={(e) => setReportMonth(e.target.value)} className="border border-slate-200 rounded-lg px-3 py-2 text-slate-600 focus:ring-2 focus:ring-emerald-500 outline-none bg-slate-50" />
+                          <input type="month" value={reportMonth} onChange={(e) => { setReportMonth(e.target.value); setSelectedReportWeek(0); setReportDayPopup(null); }} className="border border-slate-200 rounded-lg px-3 py-2 text-slate-600 focus:ring-2 focus:ring-emerald-500 outline-none bg-slate-50" />
                       </div>
                       <div className="flex gap-2">
                           <button onClick={() => exportToCSV(reportData.reportBookings, `Income_${reportMonth}`)} className="flex items-center gap-2 text-xs font-bold bg-emerald-50 text-emerald-700 px-4 py-2 rounded-lg hover:bg-emerald-100 transition-colors"><Download size={14}/> รายรับ CSV</button>
                           <button onClick={() => exportToCSV(reportData.reportExpenses, `Expense_${reportMonth}`)} className="flex items-center gap-2 text-xs font-bold bg-red-50 text-red-700 px-4 py-2 rounded-lg hover:bg-red-100 transition-colors"><Download size={14}/> รายจ่าย CSV</button>
                       </div>
                   </div>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-                      <div className="bg-emerald-50/50 p-6 rounded-2xl border border-emerald-100"><p className="text-slate-500 text-sm font-bold uppercase tracking-wider mb-2">รายได้จริง</p><p className="text-3xl font-black text-emerald-600">฿{reportData.monthlyRevenue.toLocaleString(undefined, {maximumFractionDigits:0})}</p></div>
-                      <div className="bg-red-50/50 p-6 rounded-2xl border border-red-100"><p className="text-slate-500 text-sm font-bold uppercase tracking-wider mb-2">ค่าใช้จ่าย</p><p className="text-3xl font-black text-red-600">฿{reportData.monthlyExpense.toLocaleString()}</p></div>
-                      <div className={`p-6 rounded-2xl border ${reportData.netProfit >= 0 ? 'bg-blue-50/50 border-blue-100' : 'bg-orange-50/50 border-orange-100'}`}><p className="text-slate-500 text-sm font-bold uppercase tracking-wider mb-2">กำไรสุทธิ</p><p className={`text-3xl font-black ${reportData.netProfit >= 0 ? 'text-blue-600' : 'text-orange-600'}`}>฿{reportData.netProfit.toLocaleString(undefined, {maximumFractionDigits:0})}</p></div>
-                  </div>
-                  <div className="grid lg:grid-cols-2 gap-8">
-                      <div className="bg-white border border-slate-100 rounded-2xl p-6 h-80 shadow-sm">
-                          <h3 className="text-sm font-bold text-slate-500 mb-6 text-center">แนวโน้มรายได้รายวัน</h3>
-                          <ResponsiveContainer width="100%" height="100%">
-                              <LineChart data={reportData.lineData} onClick={(e) => { if(e && e.activePayload) { setReportSelectedDay(`${reportMonth}-${e.activePayload[0].payload.date}`); setIsReportDetailOpen(true); } }}>
-                                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9"/>
-                                  <XAxis dataKey="date" tick={{fontSize: 12, fill: '#94a3b8'}} axisLine={false} tickLine={false} dy={10}/>
-                                  <YAxis tick={{fontSize: 12, fill: '#94a3b8'}} axisLine={false} tickLine={false}/>
-                                  <Tooltip contentStyle={{borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}} formatter={(v) => `฿${v.toLocaleString()}`} />
-                                  <Line type="monotone" dataKey="revenue" stroke="#10b981" strokeWidth={3} dot={{r:4, fill:'#10b981', strokeWidth:0}} activeDot={{r:6, strokeWidth:0}} />
-                              </LineChart>
-                          </ResponsiveContainer>
+
+                  {/* 3 Stat Cards — always visible */}
+                  <div className="grid grid-cols-3 gap-3 mb-6">
+                      <div className="bg-emerald-50/50 p-3 md:p-5 rounded-2xl border border-emerald-100">
+                          <p className="text-slate-500 text-[10px] md:text-xs font-bold uppercase tracking-wider mb-1">รายได้</p>
+                          <p className="text-lg md:text-2xl font-black text-emerald-600">฿{Math.round(reportData.monthlyRevenue).toLocaleString()}</p>
+                          <div className="flex flex-col gap-0.5 mt-2 pt-2 border-t border-emerald-200/50">
+                              <span className="text-[10px] md:text-xs font-bold text-emerald-700 flex items-center gap-1"><Banknote size={11}/> สด: {Math.round(reportData.monthlyCash).toLocaleString()}</span>
+                              <span className="text-[10px] md:text-xs font-bold text-emerald-700 flex items-center gap-1"><QrCode size={11}/> โอน: {Math.round(reportData.monthlyTransfer).toLocaleString()}</span>
+                          </div>
                       </div>
-                      <div className="bg-white border border-slate-100 rounded-2xl p-6 h-80 shadow-sm">
-                        <h3 className="text-sm font-bold text-slate-500 mb-6 text-center">สัดส่วนค่าใช้จ่าย</h3>
-                        <ResponsiveContainer width="100%" height="100%">
-                            <PieChart>
-                                <Pie data={reportData.expensePieData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={60} outerRadius={80} paddingAngle={5} label={({percent}) => `${(percent * 100).toFixed(0)}%`}>
-                                    {reportData.expensePieData.map((entry, index) => <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} stroke="none"/>)}
-                                </Pie>
-                                <Tooltip formatter={(v) => `฿${v.toLocaleString()}`} contentStyle={{borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)'}}/>
-                                <Legend wrapperStyle={{fontSize: '11px', color: '#64748b'}} iconType="circle"/>
-                            </PieChart>
-                        </ResponsiveContainer>
+                      <div className="bg-red-50/50 p-3 md:p-5 rounded-2xl border border-red-100">
+                          <p className="text-slate-500 text-[10px] md:text-xs font-bold uppercase tracking-wider mb-1">รายจ่าย</p>
+                          <p className="text-lg md:text-2xl font-black text-red-600">฿{reportData.monthlyExpense.toLocaleString()}</p>
+                      </div>
+                      <div className={`p-3 md:p-5 rounded-2xl border ${reportData.netProfit >= 0 ? 'bg-blue-50/50 border-blue-100' : 'bg-orange-50/50 border-orange-100'}`}>
+                          <p className="text-slate-500 text-[10px] md:text-xs font-bold uppercase tracking-wider mb-1">กำไร</p>
+                          <p className={`text-lg md:text-2xl font-black ${reportData.netProfit >= 0 ? 'text-blue-600' : 'text-orange-600'}`}>฿{Math.round(reportData.netProfit).toLocaleString()}</p>
                       </div>
                   </div>
-                  <div className="mt-8 bg-white border border-slate-100 rounded-2xl p-6 h-96 shadow-sm">
-                    <h3 className="text-sm font-bold text-slate-500 mb-6 text-center">ยอดขายตามห้องพัก</h3>
-                    <ResponsiveContainer width="100%" height="100%">
-                        <BarChart data={reportData.roomPieData} layout="vertical" margin={{top: 5, right: 30, left: 40, bottom: 5}}>
-                            <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f1f5f9"/>
-                            <XAxis type="number" hide/>
-                            <YAxis dataKey="name" type="category" width={80} tick={{fontSize: 12, fill: '#64748b', fontWeight: 'bold'}} axisLine={false} tickLine={false}/>
-                            <Tooltip content={<CustomRevenueTooltip />} />
-                            <Bar dataKey="value" radius={[0, 4, 4, 0]} barSize={24}>
-                                {reportData.roomPieData.map((entry, index) => <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />)}
-                            </Bar>
-                        </BarChart>
-                    </ResponsiveContainer>
+
+                  {/* Tab Switcher */}
+                  <div className="flex gap-2 mb-5 bg-slate-100 p-1 rounded-2xl w-fit">
+                      <button
+                          onClick={() => { setReportViewMode('weekly'); setReportDayPopup(null); }}
+                          className={`px-5 py-2.5 rounded-xl font-bold text-sm transition-all ${reportViewMode === 'weekly' ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
+                      >รายสัปดาห์</button>
+                      <button
+                          onClick={() => { setReportViewMode('monthly'); setReportDayPopup(null); }}
+                          className={`px-5 py-2.5 rounded-xl font-bold text-sm transition-all ${reportViewMode === 'monthly' ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
+                      >รายเดือน</button>
                   </div>
+
+                  {/* ===== WEEKLY TAB ===== */}
+                  {reportViewMode === 'weekly' && (
+                      <div className="space-y-4 animate-fade-in">
+                          {/* Week Picker */}
+                          <div className="flex gap-2 overflow-x-auto pb-1">
+                              {['สัปดาห์ 1','สัปดาห์ 2','สัปดาห์ 3','สัปดาห์ 4'].map((label, idx) => {
+                                  const wkData = weeklyBreakdown[idx];
+                                  const hasData = wkData && wkData.length > 0;
+                                  return (
+                                      <button key={idx} onClick={() => { setSelectedReportWeek(idx); setReportDayPopup(null); }}
+                                          className={`flex-none px-4 py-2 rounded-xl text-sm font-bold transition-all border-2 ${!hasData ? 'opacity-30 cursor-not-allowed border-transparent bg-slate-100 text-slate-400' : selectedReportWeek === idx ? 'border-emerald-500 bg-emerald-50 text-emerald-700' : 'border-transparent bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
+                                          disabled={!hasData}
+                                      >{label}</button>
+                                  );
+                              })}
+                          </div>
+
+                          {/* Stacked Bar Chart */}
+                          <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm">
+                              <div className="flex items-center gap-3 mb-3">
+                                  <span className="text-xs text-slate-400">กดแท่งเพื่อดูรายละเอียด</span>
+                                  <div className="flex gap-3 ml-auto">
+                                      <span className="flex items-center gap-1 text-xs text-slate-500"><span className="w-2.5 h-2.5 rounded-sm bg-blue-200 inline-block"></span>สด</span>
+                                      <span className="flex items-center gap-1 text-xs text-slate-500"><span className="w-2.5 h-2.5 rounded-sm bg-teal-300 inline-block"></span>โอน</span>
+                                  </div>
+                              </div>
+                              <ResponsiveContainer width="100%" height={180}>
+                                  <BarChart
+                                      data={weeklyBreakdown[selectedReportWeek]}
+                                      onClick={(data) => {
+                                          if (data && data.activePayload && data.activePayload.length) {
+                                              setReportDayPopup(data.activePayload[0].payload);
+                                          }
+                                      }}
+                                      style={{cursor:'pointer'}}
+                                  >
+                                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9"/>
+                                      <XAxis dataKey="date" tick={{fontSize:13, fill:'#94a3b8'}} axisLine={false} tickLine={false}/>
+                                      <YAxis hide/>
+                                      <Tooltip content={<CustomDailyTooltip />} cursor={{fill:'rgba(16,185,129,0.06)'}}/>
+                                      <Bar dataKey="cash" stackId="s" fill="#B5D4F4" name="สด" radius={[0,0,0,0]}/>
+                                      <Bar dataKey="transfer" stackId="s" fill="#5DCAA5" name="โอน" radius={[4,4,0,0]}/>
+                                  </BarChart>
+                              </ResponsiveContainer>
+                          </div>
+
+                          {/* Day Detail Popup */}
+                          {reportDayPopup && (
+                              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 animate-fade-in">
+                                  <div className="flex justify-between items-center mb-3">
+                                      <span className="text-sm font-bold text-slate-700">วันที่ {reportMonth}-{reportDayPopup.date}</span>
+                                      <button onClick={() => setReportDayPopup(null)} className="p-1 rounded-full hover:bg-slate-200 text-slate-400 transition-colors"><X size={16}/></button>
+                                  </div>
+                                  <div className="grid grid-cols-3 gap-3 mb-3">
+                                      <div className="bg-white rounded-xl p-3 text-center border border-slate-100">
+                                          <div className="text-xs text-slate-400 mb-1">เงินสด</div>
+                                          <div className="text-base font-bold text-blue-600">฿{Math.round(reportDayPopup.cash).toLocaleString()}</div>
+                                      </div>
+                                      <div className="bg-white rounded-xl p-3 text-center border border-slate-100">
+                                          <div className="text-xs text-slate-400 mb-1">เงินโอน</div>
+                                          <div className="text-base font-bold text-teal-600">฿{Math.round(reportDayPopup.transfer).toLocaleString()}</div>
+                                      </div>
+                                      <div className="bg-white rounded-xl p-3 text-center border border-slate-100">
+                                          <div className="text-xs text-slate-400 mb-1">รวม</div>
+                                          <div className="text-base font-bold text-slate-800">฿{Math.round(reportDayPopup.revenue).toLocaleString()}</div>
+                                      </div>
+                                  </div>
+                                  <button
+                                      onClick={() => { setReportSelectedDay(`${reportMonth}-${reportDayPopup.date}`); setIsReportDetailOpen(true); }}
+                                      className="w-full py-2 text-xs font-bold text-emerald-700 bg-emerald-50 rounded-xl hover:bg-emerald-100 transition-colors"
+                                  >ดูรายการห้องพักวันนี้ →</button>
+                              </div>
+                          )}
+
+                          {/* Week Summary Cards */}
+                          {(() => {
+                              const wkData = weeklyBreakdown[selectedReportWeek] || [];
+                              const wkTotal = wkData.reduce((s,d) => s + (d.revenue||0), 0);
+                              const wkDays = wkData.length || 1;
+                              const wkCash = wkData.reduce((s,d) => s + (d.cash||0), 0);
+                              const wkTransfer = wkData.reduce((s,d) => s + (d.transfer||0), 0);
+                              return (
+                                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                                      <div className="bg-slate-50 rounded-2xl p-4">
+                                          <div className="text-xs text-slate-400 mb-1">รวมสัปดาห์ {selectedReportWeek+1}</div>
+                                          <div className="text-xl font-black text-slate-800">฿{Math.round(wkTotal).toLocaleString()}</div>
+                                      </div>
+                                      <div className="bg-slate-50 rounded-2xl p-4">
+                                          <div className="text-xs text-slate-400 mb-1">เฉลี่ย/วัน</div>
+                                          <div className="text-xl font-black text-slate-800">฿{Math.round(wkTotal/wkDays).toLocaleString()}</div>
+                                      </div>
+                                      <div className="bg-blue-50 rounded-2xl p-4">
+                                          <div className="text-xs text-blue-400 mb-1">เงินสด</div>
+                                          <div className="text-xl font-black text-blue-700">฿{Math.round(wkCash).toLocaleString()}</div>
+                                      </div>
+                                      <div className="bg-teal-50 rounded-2xl p-4">
+                                          <div className="text-xs text-teal-400 mb-1">เงินโอน</div>
+                                          <div className="text-xl font-black text-teal-700">฿{Math.round(wkTransfer).toLocaleString()}</div>
+                                      </div>
+                                  </div>
+                              );
+                          })()}
+                      </div>
+                  )}
+
+                  {/* ===== MONTHLY TAB ===== */}
+                  {reportViewMode === 'monthly' && (
+                      <div className="space-y-6 animate-fade-in">
+
+                          {/* Income vs Expense 6-month */}
+                          <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm">
+                              <div className="flex items-center justify-between mb-3">
+                                  <h3 className="text-sm font-bold text-slate-600">รายได้ vs รายจ่าย (6 เดือน)</h3>
+                                  <div className="flex gap-3">
+                                      <span className="flex items-center gap-1 text-xs text-slate-500"><span className="w-2.5 h-2.5 rounded-sm bg-blue-200 inline-block"></span>รายได้</span>
+                                      <span className="flex items-center gap-1 text-xs text-slate-500"><span className="w-2.5 h-2.5 rounded-sm bg-red-200 inline-block"></span>รายจ่าย</span>
+                                  </div>
+                              </div>
+                              <ResponsiveContainer width="100%" height={200}>
+                                  <BarChart data={monthHistorySummary} barGap={4}>
+                                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9"/>
+                                      <XAxis dataKey="shortLabel" tick={{fontSize:11, fill:'#94a3b8'}} axisLine={false} tickLine={false} interval={0}/>
+                                      <YAxis hide/>
+                                      <Tooltip formatter={(v) => `฿${Math.round(v).toLocaleString()}`} contentStyle={{borderRadius:'12px',border:'none',boxShadow:'0 10px 15px -3px rgb(0 0 0/0.1)'}}/>
+                                      <Bar dataKey="income" fill="#B5D4F4" radius={[4,4,0,0]} name="รายได้"/>
+                                      <Bar dataKey="expense" fill="#F7C1C1" radius={[4,4,0,0]} name="รายจ่าย"/>
+                                  </BarChart>
+                              </ResponsiveContainer>
+                          </div>
+
+                          {/* YoY Comparison */}
+                          <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm">
+                              <div className="flex items-center justify-between mb-3">
+                                  <h3 className="text-sm font-bold text-slate-600">เทียบปีก่อน (รายได้)</h3>
+                                  <div className="flex gap-3">
+                                      <span className="flex items-center gap-1 text-xs text-slate-500"><span className="w-2.5 h-2.5 rounded-sm bg-teal-300 inline-block"></span>ปีนี้</span>
+                                      <span className="flex items-center gap-1 text-xs text-slate-500"><span className="w-2.5 h-2.5 rounded-sm bg-slate-300 inline-block"></span>ปีก่อน</span>
+                                  </div>
+                              </div>
+                              <ResponsiveContainer width="100%" height={200}>
+                                  <BarChart data={monthHistorySummary} barGap={4}>
+                                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9"/>
+                                      <XAxis dataKey="shortLabel" tick={{fontSize:11, fill:'#94a3b8'}} axisLine={false} tickLine={false} interval={0}/>
+                                      <YAxis hide/>
+                                      <Tooltip formatter={(v) => `฿${Math.round(v).toLocaleString()}`} contentStyle={{borderRadius:'12px',border:'none',boxShadow:'0 10px 15px -3px rgb(0 0 0/0.1)'}}/>
+                                      <Bar dataKey="income" fill="#5DCAA5" radius={[4,4,0,0]} name="ปีนี้"/>
+                                      <Bar dataKey="prevIncome" fill="#D3D1C7" radius={[4,4,0,0]} name="ปีก่อน"/>
+                                  </BarChart>
+                              </ResponsiveContainer>
+                          </div>
+
+                          {/* 6-Month Summary Table */}
+                          <div className="bg-white border border-slate-100 rounded-2xl overflow-hidden shadow-sm">
+                              <div className="px-4 py-3 border-b border-slate-100">
+                                  <h3 className="text-sm font-bold text-slate-600">สรุป 6 เดือนล่าสุด</h3>
+                              </div>
+                              <div className="overflow-x-auto">
+                                  <table className="w-full text-sm" style={{tableLayout:'fixed'}}>
+                                      <thead>
+                                          <tr className="bg-slate-50">
+                                              <th className="text-left px-4 py-2.5 text-xs text-slate-400 font-bold w-24">เดือน</th>
+                                              <th className="text-right px-4 py-2.5 text-xs text-slate-400 font-bold">รายได้</th>
+                                              <th className="text-right px-4 py-2.5 text-xs text-slate-400 font-bold">รายจ่าย</th>
+                                              <th className="text-right px-4 py-2.5 text-xs text-slate-400 font-bold w-20">กำไร%</th>
+                                          </tr>
+                                      </thead>
+                                      <tbody>
+                                          {monthHistorySummary.map((row, idx) => {
+                                              const profitPct = row.income > 0 ? Math.round((row.profit / row.income) * 100) : 0;
+                                              const isCurrent = row.monthKey === reportMonth;
+                                              return (
+                                                  <tr key={idx} className={`border-t border-slate-50 ${isCurrent ? 'bg-emerald-50/60' : 'hover:bg-slate-50/50'}`}>
+                                                      <td className="px-4 py-3 font-bold text-slate-700">
+                                                          <div className="flex items-center gap-1.5 flex-wrap">
+                                                              {row.label}
+                                                              {isCurrent && <span className="text-[9px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded font-bold">ปัจจุบัน</span>}
+                                                          </div>
+                                                      </td>
+                                                      <td className="px-4 py-3 text-right font-bold text-blue-600">฿{row.income.toLocaleString()}</td>
+                                                      <td className="px-4 py-3 text-right text-red-500">฿{row.expense.toLocaleString()}</td>
+                                                      <td className="px-4 py-3 text-right">
+                                                          <span className={`text-xs font-bold px-2 py-1 rounded-lg ${row.profit >= 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600'}`}>
+                                                              {row.profit >= 0 ? '+' : ''}{profitPct}%
+                                                          </span>
+                                                      </td>
+                                                  </tr>
+                                              );
+                                          })}
+                                      </tbody>
+                                  </table>
+                              </div>
+                          </div>
+
+                          {/* Expense Pie */}
+                          <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm h-72">
+                              <h3 className="text-sm font-bold text-slate-500 mb-3 text-center">สัดส่วนค่าใช้จ่าย</h3>
+                              <ResponsiveContainer width="100%" height="90%">
+                                  <PieChart>
+                                      <Pie data={reportData.expensePieData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={55} outerRadius={75} paddingAngle={5} label={({percent}) => `${(percent * 100).toFixed(0)}%`}>
+                                          {reportData.expensePieData.map((entry, index) => <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} stroke="none"/>)}
+                                      </Pie>
+                                      <Tooltip formatter={(v) => `฿${v.toLocaleString()}`} contentStyle={{borderRadius:'12px',border:'none',boxShadow:'0 10px 15px -3px rgb(0 0 0/0.1)'}}/>
+                                      <Legend wrapperStyle={{fontSize:'11px',color:'#64748b'}} iconType="circle"/>
+                                  </PieChart>
+                              </ResponsiveContainer>
+                          </div>
+
+                          {/* Room Revenue Bar */}
+                          <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm" style={{height: Math.max(reportData.roomPieData.length * 44 + 80, 220)}}>
+                              <h3 className="text-sm font-bold text-slate-500 mb-3 text-center">ยอดขายตามห้องพัก</h3>
+                              <ResponsiveContainer width="100%" height="88%">
+                                  <BarChart data={reportData.roomPieData} layout="vertical" margin={{top:5, right:30, left:40, bottom:5}}>
+                                      <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f1f5f9"/>
+                                      <XAxis type="number" hide/>
+                                      <YAxis dataKey="name" type="category" width={75} tick={{fontSize:12, fill:'#64748b', fontWeight:'bold'}} axisLine={false} tickLine={false}/>
+                                      <Tooltip content={<CustomRevenueTooltip />}/>
+                                      <Bar dataKey="value" radius={[0,4,4,0]} barSize={22}>
+                                          {reportData.roomPieData.map((entry, index) => <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]}/>)}
+                                      </Bar>
+                                  </BarChart>
+                              </ResponsiveContainer>
+                          </div>
+                      </div>
+                  )}
+
                </div>
            </div>
         )}
       </div>
 
-      {/* --- Modals & Popups --- */}
+      {/* --- Modals --- */}
 
-      {/* Booking Details Modal for Staff */}
+      {/* Temp Guest Modal */}
+      <Modal isOpen={isTempModalOpen} onClose={() => setIsTempModalOpen(false)} title={`ลูกค้าชั่วคราว — ${tempRoom?.name || ''}`}>
+          <div className="space-y-5">
+              <div className="bg-amber-50 p-4 rounded-2xl border border-amber-100 flex items-center justify-between">
+                  <div>
+                      <p className="text-xs text-amber-600 mb-1 font-bold">เวลาเข้าตอนนี้</p>
+                      <p className="text-3xl font-black text-amber-700">{getNowTimeStr()} น.</p>
+                  </div>
+                  <div className="text-right">
+                      <p className="text-xs text-amber-600 mb-1 font-bold">ออกโดยประมาณ</p>
+                      <p className="text-2xl font-black text-amber-500">
+                          {(() => { const out = new Date(Date.now() + (tempForm.durationHours||3)*3600000); return out.toTimeString().slice(0,5); })()} น.
+                      </p>
+                  </div>
+              </div>
+
+              <div>
+                  <label className="block text-sm font-bold text-slate-600 mb-2">ระยะเวลา</label>
+                  <div className="grid grid-cols-5 gap-2">
+                      {TEMP_DURATIONS.map(h => (
+                          <button key={h} onClick={() => setTempForm({...tempForm, durationHours: h})}
+                              className={`py-3 rounded-xl font-bold text-sm border-2 transition-all ${tempForm.durationHours === h ? 'border-amber-500 bg-amber-50 text-amber-700' : 'border-slate-100 bg-white text-slate-500 hover:bg-slate-50'}`}>
+                              {h} ชม.
+                          </button>
+                      ))}
+                  </div>
+              </div>
+
+              <div>
+                  <label className="block text-sm font-bold text-slate-600 mb-2">ราคา (บาท)</label>
+                  <input type="number" className="w-full p-3 bg-slate-50 border-0 rounded-xl text-2xl font-black text-center text-amber-700 focus:ring-2 focus:ring-amber-400 outline-none" value={tempForm.price} onChange={e => setTempForm({...tempForm, price: Number(e.target.value)})}/>
+              </div>
+
+              <div>
+                  <label className="block text-sm font-bold text-slate-600 mb-2">ชื่อลูกค้า (ไม่บังคับ)</label>
+                  <input type="text" placeholder="ลูกค้าชั่วคราว" className="w-full p-3 bg-slate-50 border-0 rounded-xl focus:ring-2 focus:ring-amber-400 outline-none" value={tempForm.guestName} onChange={e => setTempForm({...tempForm, guestName: e.target.value})}/>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                  <button onClick={() => setTempForm({...tempForm, paymentMethod: 'เงินสด'})} className={`p-3 rounded-xl border-2 flex flex-col items-center gap-1 transition-all ${tempForm.paymentMethod === 'เงินสด' ? 'border-emerald-500 bg-emerald-50 text-emerald-700' : 'border-slate-100 text-slate-400'}`}>
+                      <Banknote size={20}/><span className="font-bold text-xs">เงินสด</span>
+                  </button>
+                  <button onClick={() => setTempForm({...tempForm, paymentMethod: 'เงินโอน'})} className={`p-3 rounded-xl border-2 flex flex-col items-center gap-1 transition-all ${tempForm.paymentMethod === 'เงินโอน' ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-100 text-slate-400'}`}>
+                      <QrCode size={20}/><span className="font-bold text-xs">โอนเงิน</span>
+                  </button>
+              </div>
+
+              <div className="flex items-center gap-3 p-3 bg-white border border-slate-200 rounded-xl cursor-pointer select-none hover:bg-slate-50" onClick={() => setTempForm({...tempForm, keyDepositCollected: !tempForm.keyDepositCollected})}>
+                  <div className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${tempForm.keyDepositCollected ? 'bg-emerald-500 border-emerald-500' : 'bg-white border-slate-300'}`}>
+                      {tempForm.keyDepositCollected && <CheckSquare size={14} className="text-white"/>}
+                  </div>
+                  <span className="font-bold text-sm text-slate-700">เก็บมัดจำกุญแจ (100 บาท)</span>
+              </div>
+
+              <button onClick={handleTempCheckIn} className="w-full py-4 bg-amber-500 text-white rounded-2xl font-bold text-lg shadow-lg shadow-amber-200 hover:bg-amber-600 active:scale-95 transition-all flex items-center justify-center gap-2">
+                  <Clock size={20}/> ยืนยันเช็คอินชั่วคราว
+              </button>
+          </div>
+      </Modal>
+
       <Modal isOpen={isStaffBookingModalOpen} onClose={() => setIsStaffBookingModalOpen(false)} title="รายละเอียดการจอง">
           {selectedBookedRoom && (
               <div className="space-y-6">
@@ -1661,7 +1968,6 @@ export default function App() {
                           <div className="flex justify-between"><span>จำนวนคืน:</span><span className="font-medium">{selectedBookedRoom.booking.nights} คืน</span></div>
                       </div>
                   </div>
-
                   <div className="bg-slate-50 p-5 rounded-2xl border border-slate-100 space-y-3">
                       <h4 className="font-bold text-slate-700 text-sm mb-2 flex items-center gap-2"><Wallet size={16}/> สรุปยอดเงิน</h4>
                       <div className="flex justify-between text-sm"><span>ราคาห้องพักรวม</span><span>{selectedBookedRoom.booking.totalPrice.toLocaleString()}</span></div>
@@ -1672,28 +1978,19 @@ export default function App() {
                           <span>{(selectedBookedRoom.booking.totalPrice - selectedBookedRoom.booking.deposit + 100).toLocaleString()} ฿</span>
                       </div>
                   </div>
-
                   <div className="space-y-4 pt-2">
-                        <div 
-                            className="flex items-center gap-3 p-3 bg-white border border-slate-200 rounded-xl cursor-pointer select-none hover:bg-slate-50"
-                            onClick={() => setStaffCheckInForm({...staffCheckInForm, keyDepositCollected: !staffCheckInForm.keyDepositCollected})}
-                        >
+                        <div className="flex items-center gap-3 p-3 bg-white border border-slate-200 rounded-xl cursor-pointer select-none hover:bg-slate-50" onClick={() => setStaffCheckInForm({...staffCheckInForm, keyDepositCollected: !staffCheckInForm.keyDepositCollected})}>
                             <div className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${staffCheckInForm.keyDepositCollected ? 'bg-emerald-500 border-emerald-500' : 'bg-white border-slate-300'}`}>
                                 {staffCheckInForm.keyDepositCollected && <CheckSquare size={14} className="text-white"/>}
                             </div>
                             <span className="font-bold text-sm text-slate-700">เก็บมัดจำกุญแจแล้ว (100 บาท)</span>
                         </div>
-
-                        <div 
-                            className="flex items-center gap-3 p-3 bg-white border border-slate-200 rounded-xl cursor-pointer select-none hover:bg-slate-50"
-                            onClick={() => setStaffCheckInForm({...staffCheckInForm, isReceiptNeeded: !staffCheckInForm.isReceiptNeeded})}
-                        >
+                        <div className="flex items-center gap-3 p-3 bg-white border border-slate-200 rounded-xl cursor-pointer select-none hover:bg-slate-50" onClick={() => setStaffCheckInForm({...staffCheckInForm, isReceiptNeeded: !staffCheckInForm.isReceiptNeeded})}>
                             <div className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${staffCheckInForm.isReceiptNeeded ? 'bg-emerald-500 border-emerald-500' : 'bg-white border-slate-300'}`}>
                                 {staffCheckInForm.isReceiptNeeded && <CheckSquare size={14} className="text-white"/>}
                             </div>
                             <span className="font-bold text-sm text-slate-700">ต้องการใบเสร็จรับเงิน</span>
                         </div>
-
                         {staffCheckInForm.isReceiptNeeded && (
                             <div className="flex gap-2 items-center flex-col">
                                 <label className="w-full bg-slate-100 text-slate-500 p-3 rounded-xl text-center cursor-pointer hover:bg-slate-200 transition-colors border border-slate-200">
@@ -1710,38 +2007,23 @@ export default function App() {
                             </div>
                         )}
                   </div>
-
                   <div className="grid grid-cols-2 gap-3 pt-2">
-                        <button 
-                            onClick={() => setStaffCheckInForm({...staffCheckInForm, paymentMethod: 'เงินสด'})}
-                            className={`p-3 rounded-xl border flex flex-col items-center gap-1 transition-all ${staffCheckInForm.paymentMethod === 'เงินสด' ? 'border-emerald-500 bg-emerald-50 text-emerald-700' : 'border-slate-200 text-slate-400'}`}
-                        >
-                            <Banknote size={20}/>
-                            <span className="font-bold text-xs">เงินสด</span>
+                        <button onClick={() => setStaffCheckInForm({...staffCheckInForm, paymentMethod: 'เงินสด'})} className={`p-3 rounded-xl border flex flex-col items-center gap-1 transition-all ${staffCheckInForm.paymentMethod === 'เงินสด' ? 'border-emerald-500 bg-emerald-50 text-emerald-700' : 'border-slate-200 text-slate-400'}`}>
+                            <Banknote size={20}/><span className="font-bold text-xs">เงินสด</span>
                         </button>
-                        <button 
-                            onClick={() => setStaffCheckInForm({...staffCheckInForm, paymentMethod: 'เงินโอน'})}
-                            className={`p-3 rounded-xl border flex flex-col items-center gap-1 transition-all ${staffCheckInForm.paymentMethod === 'เงินโอน' ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-200 text-slate-400'}`}
-                        >
-                            <QrCode size={20}/>
-                            <span className="font-bold text-xs">โอนเงิน</span>
+                        <button onClick={() => setStaffCheckInForm({...staffCheckInForm, paymentMethod: 'เงินโอน'})} className={`p-3 rounded-xl border flex flex-col items-center gap-1 transition-all ${staffCheckInForm.paymentMethod === 'เงินโอน' ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-200 text-slate-400'}`}>
+                            <QrCode size={20}/><span className="font-bold text-xs">โอนเงิน</span>
                         </button>
                   </div>
-
-                  <button 
-                    onClick={() => confirmStaffCheckIn(true)} 
-                    className="w-full py-4 bg-emerald-600 text-white rounded-2xl font-bold text-lg shadow-lg shadow-emerald-200 hover:bg-emerald-700 active:scale-95 transition-all"
-                  >
+                  <button onClick={() => confirmStaffCheckIn(true)} className="w-full py-4 bg-emerald-600 text-white rounded-2xl font-bold text-lg shadow-lg shadow-emerald-200 hover:bg-emerald-700 active:scale-95 transition-all">
                       ยืนยันเข้าพัก
                   </button>
               </div>
           )}
       </Modal>
 
-      {/* Staff Walk-in Check-in Modal */}
       <Modal isOpen={isStaffCheckInModalOpen} onClose={() => setIsStaffCheckInModalOpen(false)} title="ยืนยันการรับเงิน (Walk-in)">
           <div className="space-y-6">
-              
               <div className="bg-emerald-50 rounded-2xl p-6 border border-emerald-100 relative">
                   <div className="flex justify-between items-center mb-4 pb-4 border-b border-emerald-200/50">
                       <span className="font-bold text-emerald-800 flex items-center gap-2"><Moon size={18}/> จำนวนคืน</span>
@@ -1751,60 +2033,36 @@ export default function App() {
                           <button onClick={() => handleStaffNightsChange(staffCheckInForm.nights + 1)} className="w-8 h-8 flex items-center justify-center bg-white rounded-full shadow-sm text-emerald-600 hover:bg-emerald-100 font-bold">+</button>
                       </div>
                   </div>
-
                   <div className="text-center">
                       <p className="text-slate-500 text-sm font-medium mb-1">ยอดชำระรวม ({selectedStaffRooms.length} ห้อง x {staffCheckInForm.nights} คืน)</p>
-                      <input 
-                        type="number" 
-                        className="text-4xl font-black text-emerald-600 bg-transparent text-center w-full outline-none focus:ring-0" 
-                        value={staffCheckInForm.totalPrice}
-                        onChange={(e) => setStaffCheckInForm({...staffCheckInForm, totalPrice: Number(e.target.value)})}
-                      />
+                      <input type="number" className="text-4xl font-black text-emerald-600 bg-transparent text-center w-full outline-none focus:ring-0" value={staffCheckInForm.totalPrice} onChange={(e) => setStaffCheckInForm({...staffCheckInForm, totalPrice: Number(e.target.value)})}/>
                       <p className="text-slate-400 text-xs">บาท</p>
                   </div>
               </div>
-
               <div>
                   <label className="block text-slate-600 font-bold mb-3 text-sm">ช่องทางการชำระเงิน</label>
                   <div className="grid grid-cols-2 gap-4">
-                      <button 
-                        onClick={() => setStaffCheckInForm({...staffCheckInForm, paymentMethod: 'เงินสด'})}
-                        className={`p-4 rounded-2xl border-2 flex flex-col items-center gap-2 transition-all ${staffCheckInForm.paymentMethod === 'เงินสด' ? 'border-emerald-500 bg-emerald-50 text-emerald-700' : 'border-slate-100 text-slate-400'}`}
-                      >
-                          <Banknote size={28}/>
-                          <span className="font-bold">เงินสด</span>
+                      <button onClick={() => setStaffCheckInForm({...staffCheckInForm, paymentMethod: 'เงินสด'})} className={`p-4 rounded-2xl border-2 flex flex-col items-center gap-2 transition-all ${staffCheckInForm.paymentMethod === 'เงินสด' ? 'border-emerald-500 bg-emerald-50 text-emerald-700' : 'border-slate-100 text-slate-400'}`}>
+                          <Banknote size={28}/><span className="font-bold">เงินสด</span>
                       </button>
-                      <button 
-                        onClick={() => setStaffCheckInForm({...staffCheckInForm, paymentMethod: 'เงินโอน'})}
-                        className={`p-4 rounded-2xl border-2 flex flex-col items-center gap-2 transition-all ${staffCheckInForm.paymentMethod === 'เงินโอน' ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-100 text-slate-400'}`}
-                      >
-                          <QrCode size={28}/>
-                          <span className="font-bold">โอนเงิน</span>
+                      <button onClick={() => setStaffCheckInForm({...staffCheckInForm, paymentMethod: 'เงินโอน'})} className={`p-4 rounded-2xl border-2 flex flex-col items-center gap-2 transition-all ${staffCheckInForm.paymentMethod === 'เงินโอน' ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-100 text-slate-400'}`}>
+                          <QrCode size={28}/><span className="font-bold">โอนเงิน</span>
                       </button>
                   </div>
               </div>
-
               <div className="space-y-3">
-                <div 
-                    className="flex items-center gap-3 p-4 bg-slate-50 rounded-xl cursor-pointer select-none transition-colors hover:bg-slate-100"
-                    onClick={() => setStaffCheckInForm({...staffCheckInForm, keyDepositCollected: !staffCheckInForm.keyDepositCollected})}
-                >
+                <div className="flex items-center gap-3 p-4 bg-slate-50 rounded-xl cursor-pointer select-none transition-colors hover:bg-slate-100" onClick={() => setStaffCheckInForm({...staffCheckInForm, keyDepositCollected: !staffCheckInForm.keyDepositCollected})}>
                     <div className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center transition-colors ${staffCheckInForm.keyDepositCollected ? 'bg-emerald-500 border-emerald-500' : 'bg-white border-slate-300'}`}>
                         {staffCheckInForm.keyDepositCollected && <CheckSquare size={16} className="text-white"/>}
                     </div>
                     <span className="font-bold text-slate-700 flex items-center gap-2 text-sm"><Key size={18}/> เก็บมัดจำกุญแจครบถ้วน (100 บาท/ห้อง)</span>
                 </div>
-
-                <div 
-                    className="flex items-center gap-3 p-4 bg-slate-50 rounded-xl cursor-pointer select-none transition-colors hover:bg-slate-100"
-                    onClick={() => setStaffCheckInForm({...staffCheckInForm, isReceiptNeeded: !staffCheckInForm.isReceiptNeeded})}
-                >
+                <div className="flex items-center gap-3 p-4 bg-slate-50 rounded-xl cursor-pointer select-none transition-colors hover:bg-slate-100" onClick={() => setStaffCheckInForm({...staffCheckInForm, isReceiptNeeded: !staffCheckInForm.isReceiptNeeded})}>
                     <div className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center transition-colors ${staffCheckInForm.isReceiptNeeded ? 'bg-emerald-500 border-emerald-500' : 'bg-white border-slate-300'}`}>
                         {staffCheckInForm.isReceiptNeeded && <CheckSquare size={16} className="text-white"/>}
                     </div>
                     <span className="font-bold text-slate-700 flex items-center gap-2 text-sm"><Receipt size={18}/> ต้องการใบเสร็จรับเงิน</span>
                 </div>
-
                 {staffCheckInForm.isReceiptNeeded && (
                     <div className="animate-fade-in flex flex-col items-center">
                         <label className="block w-full bg-white border-2 border-dashed border-slate-300 p-4 rounded-xl text-center cursor-pointer hover:border-emerald-400 hover:bg-emerald-50 transition-all">
@@ -1822,11 +2080,7 @@ export default function App() {
                     </div>
                 )}
               </div>
-
-              <button 
-                onClick={() => confirmStaffCheckIn(false)} 
-                className="w-full py-4 bg-emerald-600 text-white rounded-2xl font-bold text-lg shadow-lg shadow-emerald-200 hover:bg-emerald-700 active:scale-95 transition-all"
-              >
+              <button onClick={() => confirmStaffCheckIn(false)} className="w-full py-4 bg-emerald-600 text-white rounded-2xl font-bold text-lg shadow-lg shadow-emerald-200 hover:bg-emerald-700 active:scale-95 transition-all">
                   ยืนยันการเช็คอิน
               </button>
           </div>
@@ -1841,11 +2095,7 @@ export default function App() {
 
       <Modal isOpen={isMessagePreviewOpen} onClose={() => setIsMessagePreviewOpen(false)} title="ตัวอย่างข้อความ (แก้ไขได้)">
          <div className="space-y-4">
-            <textarea 
-                className="w-full h-48 p-4 rounded-xl border border-slate-200 bg-slate-50 text-sm font-mono text-slate-800 focus:ring-2 focus:ring-[#06C755] outline-none"
-                value={messagePreviewText} 
-                onChange={(e) => setMessagePreviewText(e.target.value)}
-            />
+            <textarea className="w-full h-48 p-4 rounded-xl border border-slate-200 bg-slate-50 text-sm font-mono text-slate-800 focus:ring-2 focus:ring-[#06C755] outline-none" value={messagePreviewText} onChange={(e) => setMessagePreviewText(e.target.value)}/>
             <button onClick={confirmSendMessage} className="w-full py-3 bg-[#06C755] text-white rounded-xl font-bold hover:bg-[#05b54d] flex justify-center items-center gap-2 shadow-lg shadow-green-100"><Send size={18}/> ยืนยันส่ง LINE</button>
          </div>
       </Modal>
@@ -1859,27 +2109,54 @@ export default function App() {
 
       <Modal isOpen={isReportDetailOpen} onClose={() => setIsReportDetailOpen(false)} title={`รายละเอียดวันที่ ${reportSelectedDay}`}>
           {dailyDetails.length > 0 ? (
-              <table className="w-full text-sm text-left">
-                  <thead className="bg-emerald-50 text-emerald-800 font-bold"><tr><th className="p-3 rounded-l-lg">ห้อง</th><th className="p-3">ลูกค้า</th><th className="p-3 text-right rounded-r-lg">รายได้ (เฉลี่ย/คืน)</th></tr></thead>
-                  <tbody className="divide-y divide-slate-100">
-                      {dailyDetails.map((d, idx) => (
-                          <tr key={idx}><td className="p-3 font-bold text-slate-700">{d.room}</td><td className="p-3 text-slate-600">{d.guest}</td><td className="p-3 text-right font-bold text-emerald-600">{d.amount.toLocaleString(undefined, {maximumFractionDigits:0})}</td></tr>
-                      ))}
-                      <tr className="bg-slate-50 font-bold"><td colSpan="2" className="p-3 text-right text-slate-500">รวมทั้งสิ้น</td><td className="p-3 text-right text-emerald-700 text-lg">{dailyDetails.reduce((s, c) => s + c.amount, 0).toLocaleString(undefined, {maximumFractionDigits:0})}</td></tr>
-                  </tbody>
-              </table>
+              <>
+                  <div className="flex gap-4 mb-4">
+                      <div className="bg-emerald-50 text-emerald-700 p-3 rounded-xl flex-1 text-center border border-emerald-100">
+                          <p className="text-xs font-bold flex items-center justify-center gap-1"><Banknote size={14}/> เงินสด</p>
+                          <p className="text-lg font-black">{dailyDetails.filter(d => d.paymentMethod === 'เงินสด').reduce((sum, d) => sum + d.amount, 0).toLocaleString(undefined, {maximumFractionDigits:0})} ฿</p>
+                      </div>
+                      <div className="bg-blue-50 text-blue-700 p-3 rounded-xl flex-1 text-center border border-blue-100">
+                          <p className="text-xs font-bold flex items-center justify-center gap-1"><QrCode size={14}/> เงินโอน</p>
+                          <p className="text-lg font-black">{dailyDetails.filter(d => d.paymentMethod === 'เงินโอน').reduce((sum, d) => sum + d.amount, 0).toLocaleString(undefined, {maximumFractionDigits:0})} ฿</p>
+                      </div>
+                  </div>
+                  <table className="w-full text-sm text-left">
+                      <thead className="bg-slate-50 text-slate-600 font-bold">
+                          <tr>
+                              <th className="p-3 rounded-l-lg">ห้อง</th>
+                              <th className="p-3">ลูกค้า</th>
+                              <th className="p-3 text-center">ชำระ</th>
+                              <th className="p-3 text-right rounded-r-lg">รายได้เฉลี่ย/คืน</th>
+                          </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                          {dailyDetails.map((d, idx) => (
+                              <tr key={idx}>
+                                  <td className="p-3 font-bold text-slate-700">{d.room}</td>
+                                  <td className="p-3 text-slate-600">{d.guest}</td>
+                                  <td className="p-3 text-center">
+                                      <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${d.paymentMethod === 'เงินโอน' ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                                          {d.paymentMethod}
+                                      </span>
+                                  </td>
+                                  <td className="p-3 text-right font-bold text-emerald-600">{d.amount.toLocaleString(undefined, {maximumFractionDigits:0})}</td>
+                              </tr>
+                          ))}
+                          <tr className="bg-slate-50 font-bold">
+                              <td colSpan="3" className="p-3 text-right text-slate-500">รวมทั้งสิ้น</td>
+                              <td className="p-3 text-right text-emerald-700 text-lg">{dailyDetails.reduce((s, c) => s + c.amount, 0).toLocaleString(undefined, {maximumFractionDigits:0})}</td>
+                          </tr>
+                      </tbody>
+                  </table>
+              </>
           ) : <p className="text-center text-slate-400 py-8">ไม่มีรายได้ในวันนี้</p>}
       </Modal>
 
       <Modal isOpen={isRoomSettingsOpen} onClose={() => setIsRoomSettingsOpen(false)} title="ตั้งค่าระบบ / ผู้ช่วย">
          <div className="space-y-6">
-            
-            {/* Smart Assistant Section (Moved here) */}
             <div className="bg-emerald-50/50 p-5 rounded-2xl border border-emerald-100">
                 <h3 className="font-bold text-slate-700 mb-3 flex items-center gap-2 text-sm uppercase tracking-wide"><MessageCircle className="text-emerald-500" size={16}/> ผู้ช่วยอัจฉริยะ (Auto-Message)</h3>
-                
                 <div className="space-y-4">
-                    {/* Check-in Tomorrow */}
                     <div className="bg-white rounded-xl p-4 shadow-sm border border-slate-100">
                         <h4 className="font-bold text-sm text-slate-700 mb-2 flex items-center gap-2"><LogIn size={14} className="text-blue-500"/> เตรียมเข้าพักพรุ่งนี้ ({communicationData.checkInTomorrow.length})</h4>
                         <div className="space-y-2 max-h-40 overflow-y-auto custom-scrollbar">
@@ -1890,12 +2167,7 @@ export default function App() {
                                         <p className="text-slate-500">{b.roomName}</p>
                                         {b.lineId && <p className="text-xs text-[#06C755] font-bold flex items-center gap-1 mt-1"><MessageCircle size={10}/> Line: {b.lineId}</p>}
                                     </div>
-                                    <button 
-                                        onClick={() => openMessagePreview(
-                                            `สวัสดีครับคุณ ${b.guestName} 🙏\nทางจันผารีสอร์ทขอแจ้งเตือนการเข้าพักในวันพรุ่งนี้ครับ 🏠\n\n📍 แผนที่เดินทาง: https://maps.app.goo.gl/s8QbZDrNPNXSGt5X8\n📞 ติดต่อสอบถาม: 08x-xxx-xxxx\n\nหากต้องการความช่วยเหลือเพิ่มเติมแจ้งได้เลยนะครับ`
-                                        )}
-                                        className="bg-[#06C755] text-white px-3 py-1.5 rounded-lg font-bold flex items-center gap-1 hover:bg-[#05b54d]"
-                                    >
+                                    <button onClick={() => openMessagePreview(`สวัสดีครับคุณ ${b.guestName} 🙏\nทางจันผารีสอร์ทขอแจ้งเตือนการเข้าพักในวันพรุ่งนี้ครับ 🏠\n\n📍 แผนที่เดินทาง: https://maps.app.goo.gl/s8QbZDrNPNXSGt5X8\n📞 ติดต่อสอบถาม: 08x-xxx-xxxx\n\nหากต้องการความช่วยเหลือเพิ่มเติมแจ้งได้เลยนะครับ`)} className="bg-[#06C755] text-white px-3 py-1.5 rounded-lg font-bold flex items-center gap-1 hover:bg-[#05b54d]">
                                         <Send size={10}/>
                                     </button>
                                 </div>
@@ -1903,8 +2175,6 @@ export default function App() {
                             {communicationData.checkInTomorrow.length === 0 && <p className="text-center text-slate-400 text-xs py-2">ไม่มีรายการ</p>}
                         </div>
                     </div>
-
-                    {/* Check-out Today */}
                     <div className="bg-white rounded-xl p-4 shadow-sm border border-slate-100">
                         <h4 className="font-bold text-sm text-slate-700 mb-2 flex items-center gap-2"><LogOut size={14} className="text-orange-500"/> ขอบคุณลูกค้า (ออกวันนี้) ({communicationData.checkedOutToday.length})</h4>
                         <div className="space-y-2 max-h-40 overflow-y-auto custom-scrollbar">
@@ -1915,12 +2185,7 @@ export default function App() {
                                         <p className="text-slate-500">{b.roomName}</p>
                                         {b.lineId && <p className="text-xs text-[#06C755] font-bold flex items-center gap-1 mt-1"><MessageCircle size={10}/> Line: {b.lineId}</p>}
                                     </div>
-                                    <button 
-                                        onClick={() => openMessagePreview(
-                                            `ขอบพระคุณ คุณ ${b.guestName} ที่มาพักที่จันผารีสอร์ทครับ 🌿\nหวังว่าจะได้มีโอกาสต้อนรับอีกครั้งนะครับ\n\nฝากรีวิวเป็นกำลังใจให้เราด้วยนะครับ ⭐⭐⭐⭐⭐\nhttps://maps.app.goo.gl/s8QbZDrNPNXSGt5X8`
-                                        )}
-                                        className="bg-slate-800 text-white px-3 py-1.5 rounded-lg font-bold flex items-center gap-1 hover:bg-slate-900"
-                                    >
+                                    <button onClick={() => openMessagePreview(`ขอบพระคุณ คุณ ${b.guestName} ที่มาพักที่จันผารีสอร์ทครับ 🌿\nหวังว่าจะได้มีโอกาสต้อนรับอีกครั้งนะครับ\n\nฝากรีวิวเป็นกำลังใจให้เราด้วยนะครับ ⭐⭐⭐⭐⭐\nhttps://maps.app.goo.gl/s8QbZDrNPNXSGt5X8`)} className="bg-slate-800 text-white px-3 py-1.5 rounded-lg font-bold flex items-center gap-1 hover:bg-slate-900">
                                         <Send size={10}/>
                                     </button>
                                 </div>
@@ -1930,8 +2195,6 @@ export default function App() {
                     </div>
                 </div>
             </div>
-
-            {/* Room Management Section */}
             <div className="bg-slate-50 p-5 rounded-2xl border border-slate-100">
                 <h4 className="font-bold text-slate-700 mb-3 text-sm">เพิ่ม/แก้ไข ห้องพัก</h4>
                 <div className="grid grid-cols-3 gap-3 mb-3">
@@ -1941,7 +2204,6 @@ export default function App() {
                 </div>
                 <input placeholder="ประเภท (เช่น เตียงเดี่ยว, บ้านพัก)" className="w-full p-2.5 border-0 bg-white rounded-lg shadow-sm mb-3" value={roomForm.type} onChange={e => setRoomForm({...roomForm, type: e.target.value})} />
                 <button onClick={handleSaveRoom} className="w-full py-2.5 bg-slate-800 text-white rounded-xl font-bold hover:bg-slate-900 transition-colors">บันทึกห้อง</button>
-                
                 <div className="max-h-48 overflow-y-auto pt-4 custom-scrollbar">
                     <table className="w-full text-sm text-left">
                         <thead><tr className="text-slate-400 border-b border-slate-100"><th className="pb-2 font-normal">ID</th><th className="pb-2 font-normal">ชื่อ</th><th className="pb-2 font-normal">ราคา</th><th className="pb-2 font-normal">จัดการ</th></tr></thead>
@@ -1954,7 +2216,7 @@ export default function App() {
          </div>
       </Modal>
 
-      <Modal isOpen={isBookingModalOpen} onClose={() => setIsBookingModalOpen(false)} title={formData.id ? `แก้ไขการจอง (${formData.docNo})` : `จองห้องพักใหม่`}>
+      <Modal isOpen={isBookingModalOpen} onClose={() => setIsBookingModalOpen(false)} title={formData.id ? `แก้ไขข้อมูล (${formData.docNo})` : `จองห้องพักใหม่`}>
         <div className="space-y-6 font-sans">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="space-y-4">
@@ -1990,14 +2252,10 @@ export default function App() {
                                 <div><label className="block text-xs font-bold text-slate-400 mb-1">เบอร์โทรศัพท์ <span className="text-red-500">*</span></label><input type="tel" className="w-full p-2.5 bg-slate-50 border-0 rounded-xl text-sm font-medium focus:bg-white focus:ring-2 focus:ring-emerald-400 transition-all" value={formData.phone} onChange={e => setFormData({...formData, phone: e.target.value})} /></div>
                                 <div><label className="block text-xs font-bold text-emerald-500 mb-1">LINE ID / ชื่อไลน์</label><input type="text" className="w-full p-2.5 bg-emerald-50/50 border-0 rounded-xl text-sm font-medium focus:bg-white focus:ring-2 focus:ring-emerald-400 transition-all" value={formData.lineId} onChange={e => setFormData({...formData, lineId: e.target.value})} placeholder="@ หรือ ชื่อ" /></div>
                             </div>
-                            
-                            {/* New Fields Area */}
                             <div className="grid grid-cols-2 gap-3 pt-2">
                                 <div><label className="block text-xs font-bold text-slate-400 mb-1">ทะเบียนรถ</label><input type="text" placeholder="เช่น กก 1234" className="w-full p-2.5 bg-slate-50 border-0 rounded-xl text-sm font-medium focus:bg-white focus:ring-2 focus:ring-emerald-400" value={formData.licensePlate} onChange={e => setFormData({...formData, licensePlate: e.target.value})} /></div>
                                 <div><label className="block text-xs font-bold text-slate-400 mb-1">เลขบัตร ปชช.</label><input type="text" placeholder="13 หลัก" className="w-full p-2.5 bg-slate-50 border-0 rounded-xl text-sm font-medium focus:bg-white focus:ring-2 focus:ring-emerald-400" value={formData.idCard} onChange={e => setFormData({...formData, idCard: e.target.value})} /></div>
                             </div>
-
-                            {/* Date of Birth & Age */}
                             <div className="grid grid-cols-3 gap-3 pt-2">
                                 <div className="col-span-2">
                                     <label className="block text-xs font-bold text-slate-400 mb-1">วัน/เดือน/ปีเกิด</label>
@@ -2010,7 +2268,6 @@ export default function App() {
                                     </div>
                                 </div>
                             </div>
-                            
                             <div><label className="block text-xs font-bold text-slate-400 mb-1">หมายเหตุ</label><input type="text" className="w-full p-2.5 bg-slate-50 border-0 rounded-xl text-sm font-medium focus:bg-white focus:ring-2 focus:ring-emerald-400" value={formData.note} onChange={e => setFormData({...formData, note: e.target.value})} /></div>
                         </div>
                     </div>
@@ -2031,24 +2288,28 @@ export default function App() {
                 {formData.id && (
                     <>
                         <button onClick={handleDeleteBooking} className="px-5 py-3 bg-red-50 text-red-500 rounded-xl font-bold hover:bg-red-100 flex items-center gap-2 transition-colors"><Trash2 size={18}/></button>
-                        <button onClick={goToCheckIn} className="flex-1 py-3 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700 flex justify-center items-center gap-2 shadow-lg shadow-emerald-200 transition-all transform active:scale-95"><LogIn size={18}/> เช็คอิน</button>
+                        {currentBookingStatus !== 'checked-out' && (
+                            <button onClick={goToCheckIn} className="flex-1 py-3 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700 flex justify-center items-center gap-2 shadow-lg shadow-emerald-200 transition-all transform active:scale-95"><LogIn size={18}/> เช็คอิน / รับชำระ</button>
+                        )}
                     </>
                 )}
-                <button onClick={handleBookingSave} className={`py-3 bg-slate-800 text-white rounded-xl font-bold hover:bg-slate-900 flex justify-center items-center gap-2 shadow-lg shadow-slate-300 transition-all transform active:scale-95 ${formData.id ? 'px-8' : 'w-full'}`}><Save size={18}/> {formData.id ? 'บันทึก' : 'ยืนยันการจอง'}</button>
+                <button onClick={handleBookingSave} className={`py-3 bg-slate-800 text-white rounded-xl font-bold hover:bg-slate-900 flex justify-center items-center gap-2 shadow-lg shadow-slate-300 transition-all transform active:scale-95 ${formData.id ? 'px-8' : 'w-full'}`}><Save size={18}/> {formData.id ? 'บันทึกการแก้ไข' : 'ยืนยันการจอง'}</button>
             </div>
         </div>
       </Modal>
 
-      <Modal isOpen={isCheckInModalOpen} onClose={() => setIsCheckInModalOpen(false)} title={`เช็คอิน / จัดการห้องพัก (${formData.docNo})`} maxWidth="max-w-4xl">
+      <Modal isOpen={isCheckInModalOpen} onClose={() => setIsCheckInModalOpen(false)} title={`จัดการห้องพัก (${formData.docNo})`} maxWidth="max-w-4xl">
          <div className="space-y-6 font-sans">
             <div className="flex flex-col md:flex-row gap-6">
                 <div className="w-full md:w-1/2 space-y-4">
                     <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm">
-                        <h3 className="font-bold text-slate-700 mb-4 flex items-center gap-2 text-sm uppercase tracking-wide"><FileText className="text-blue-500" size={16}/> รายละเอียดห้องพัก</h3>
+                        <div className="flex justify-between items-start mb-4">
+                            <h3 className="font-bold text-slate-700 flex items-center gap-2 text-sm uppercase tracking-wide"><FileText className="text-blue-500" size={16}/> รายละเอียดห้องพัก</h3>
+                            <button onClick={() => { setIsCheckInModalOpen(false); setIsBookingModalOpen(true); }} className="text-[10px] bg-slate-100 text-slate-500 px-2 py-1 rounded hover:bg-slate-200 font-bold flex items-center gap-1"><Edit size={10}/> แก้ไขข้อมูลลูกค้า</button>
+                        </div>
                         <div className="space-y-3 text-sm text-slate-600">
                             <div className="flex justify-between p-2 bg-slate-50 rounded-lg"><span>ห้องหลัก:</span><span className="font-black text-slate-800 text-lg">{selectedRoom?.name}</span></div>
                             <div className="flex justify-between items-center px-2"><span>ลูกค้า:</span><span className="font-bold text-slate-800">{formData.guestName}</span></div>
-                             {/* Show Car/ID if exists */}
                             {(formData.licensePlate || formData.idCard || formData.lineId) && (
                                 <div className="flex flex-wrap gap-2 px-2 text-xs text-slate-500">
                                     {formData.lineId && <span className="bg-emerald-50 text-emerald-600 px-2 py-1 rounded flex items-center gap-1 font-bold"><MessageCircle size={10}/> {formData.lineId}</span>}
@@ -2057,14 +2318,24 @@ export default function App() {
                                 </div>
                             )}
                             <div className="flex justify-between items-center px-2"><span>เข้าพัก:</span><span className="font-medium">{formData.checkInDate} ({formData.nights} คืน)</span></div>
-                            <div className="flex justify-between pt-2 border-t px-2"><span>สถานะ:</span><span className={`font-bold px-3 py-0.5 rounded-full text-xs ${bookings.find(b=>b.id===formData.id)?.status === 'occupied' ? 'bg-blue-100 text-blue-600' : 'bg-yellow-100 text-yellow-600'}`}>{bookings.find(b=>b.id===formData.id)?.status === 'occupied' ? 'เข้าพักแล้ว' : 'จองแล้ว'}</span></div>
+                            <div className="grid grid-cols-2 gap-2 px-2">
+                                <div className="flex flex-col gap-1">
+                                    <span className="text-xs text-slate-400">เวลาเข้าพัก</span>
+                                    <input type="time" value={formData.checkInTimeStr} onChange={e => setFormData({...formData, checkInTimeStr: e.target.value})} className="bg-blue-50 border border-blue-200 rounded-lg px-2 py-1 text-sm font-bold text-blue-700 focus:ring-2 focus:ring-blue-400 outline-none"/>
+                                </div>
+                                <div className="flex flex-col gap-1">
+                                    <span className="text-xs text-slate-400">เวลาออก (จริง)</span>
+                                    <input type="time" value={formData.checkOutTimeStr} onChange={e => setFormData({...formData, checkOutTimeStr: e.target.value})} className="bg-orange-50 border border-orange-200 rounded-lg px-2 py-1 text-sm font-bold text-orange-700 focus:ring-2 focus:ring-orange-400 outline-none"/>
+                                </div>
+                            </div>
+                            <div className="flex justify-between pt-2 border-t px-2"><span>สถานะ:</span><span className={`font-bold px-3 py-0.5 rounded-full text-xs ${bookings.find(b=>b.id===formData.id)?.status === 'occupied' ? 'bg-blue-100 text-blue-600' : (bookings.find(b=>b.id===formData.id)?.status === 'checked-out' ? 'bg-slate-100 text-slate-600' : 'bg-yellow-100 text-yellow-600')}`}>{bookings.find(b=>b.id===formData.id)?.status === 'occupied' ? 'เข้าพักแล้ว' : (bookings.find(b=>b.id===formData.id)?.status === 'checked-out' ? 'คืนห้องแล้ว' : 'จองแล้ว')}</span></div>
                         </div>
                     </div>
-                    {formData.billPhoto && (
+                    {formData.billPhotoUrl && (
                         <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm">
                             <h3 className="font-bold text-slate-700 mb-3 flex items-center gap-2 text-sm uppercase tracking-wide"><ImageIcon className="text-emerald-500" size={16}/> หลักฐานการโอน / บิล</h3>
                             <div className="rounded-xl overflow-hidden border border-slate-200">
-                                <img src={formData.billPhoto} alt="Bill Evidence" className="w-full h-auto object-cover max-h-64" />
+                                <img src={formData.billPhotoUrl} alt="Bill Evidence" className="w-full h-auto object-cover max-h-64" />
                             </div>
                         </div>
                     )}
@@ -2076,11 +2347,12 @@ export default function App() {
                                     const b = bookings.find(x => x.id === bid);
                                     if (!b) return null;
                                     const isOccupied = b.status === 'occupied';
+                                    const isCheckedOut = b.status === 'checked-out';
                                     return (
                                         <div key={bid} className="flex justify-between items-center bg-white p-3 rounded-xl border border-blue-100 text-sm shadow-sm">
                                             <span className="font-bold text-slate-700">{b.roomName}</span>
                                             <div className="flex items-center gap-2">
-                                                <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${isOccupied ? 'bg-blue-100 text-blue-600' : 'bg-yellow-100 text-yellow-600'}`}>{isOccupied ? 'พัก' : 'จอง'}</span>
+                                                <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${isOccupied ? 'bg-blue-100 text-blue-600' : (isCheckedOut ? 'bg-slate-100 text-slate-600' : 'bg-yellow-100 text-yellow-600')}`}>{isOccupied ? 'พัก' : (isCheckedOut ? 'คืนห้อง' : 'จอง')}</span>
                                                 {isOccupied && (<button onClick={() => handleCheckoutSingle(b.id, b.keyDeposit)} className="text-[10px] bg-orange-100 text-orange-600 px-2 py-1 rounded border border-orange-200 hover:bg-orange-200">คืนห้อง</button>)}
                                             </div>
                                         </div>
@@ -2106,10 +2378,14 @@ export default function App() {
                             <div className="flex justify-between items-center pt-2"><span className="font-bold text-lg text-red-500">ยอดคงเหลือสุทธิ</span><span className="font-black text-2xl text-red-500">{fin.remainingToCollect?.toLocaleString()} ฿</span></div>
                         </div>
                         <div className="bg-emerald-50/50 p-5 border-t border-emerald-100">
-                            <div className="flex justify-between items-center mb-3"><label className="text-sm font-bold text-emerald-800">รับเงินเพิ่มครั้งนี้</label><div className="flex gap-1"><button onClick={() => setFormData({...formData, currentPayment: fin.remainingToCollect})} className="text-[10px] bg-white border border-emerald-200 text-emerald-600 px-2 py-1 rounded hover:bg-emerald-50 font-bold">จ่ายเต็ม</button><button onClick={() => setFormData({...formData, currentPayment: 0})} className="text-[10px] bg-white border border-slate-200 text-slate-600 px-2 py-1 rounded hover:bg-slate-50">0</button></div></div>
+                            <div className="flex justify-between items-center mb-3"><label className="text-sm font-bold text-emerald-800">{currentBookingStatus === 'checked-out' ? 'ปรับปรุงยอดเงิน' : 'รับเงินเพิ่มครั้งนี้'}</label><div className="flex gap-1"><button onClick={() => setFormData({...formData, currentPayment: fin.remainingToCollect})} className="text-[10px] bg-white border border-emerald-200 text-emerald-600 px-2 py-1 rounded hover:bg-emerald-50 font-bold">จ่ายเต็ม</button><button onClick={() => setFormData({...formData, currentPayment: 0})} className="text-[10px] bg-white border border-slate-200 text-slate-600 px-2 py-1 rounded hover:bg-slate-50">0</button></div></div>
+                            <div className="flex gap-2 mb-3">
+                                <button onClick={() => setFormData({...formData, paymentMethod: 'เงินสด'})} className={`flex-1 py-2.5 rounded-xl text-xs font-bold border flex items-center justify-center gap-1.5 transition-all ${formData.paymentMethod === 'เงินสด' ? 'border-emerald-500 bg-emerald-50 text-emerald-700 shadow-sm' : 'border-slate-200 text-slate-500 bg-white hover:bg-slate-50'}`}><Banknote size={16}/> เงินสด</button>
+                                <button onClick={() => setFormData({...formData, paymentMethod: 'เงินโอน'})} className={`flex-1 py-2.5 rounded-xl text-xs font-bold border flex items-center justify-center gap-1.5 transition-all ${formData.paymentMethod === 'เงินโอน' ? 'border-blue-500 bg-blue-50 text-blue-700 shadow-sm' : 'border-slate-200 text-slate-500 bg-white hover:bg-slate-50'}`}><QrCode size={16}/> เงินโอน</button>
+                            </div>
                             <div className="flex flex-col gap-3">
                                 <input type="number" className="w-full p-3 rounded-xl border border-emerald-200 text-right font-bold text-xl text-emerald-700 focus:ring-2 focus:ring-emerald-500 outline-none shadow-sm mb-2 bg-white" value={formData.currentPayment} onChange={e => setFormData({...formData, currentPayment: e.target.value})} placeholder="0" />
-                                <button onClick={handleCheckInSave} className="w-full bg-emerald-600 text-white px-5 py-3 rounded-xl font-bold shadow-lg shadow-emerald-200 hover:bg-emerald-700 transition-all flex justify-center items-center gap-2 active:scale-95"><Coins size={20}/> บันทึกรับเงิน</button>
+                                <button onClick={handleCheckInSave} className="w-full bg-emerald-600 text-white px-5 py-3 rounded-xl font-bold shadow-lg shadow-emerald-200 hover:bg-emerald-700 transition-all flex justify-center items-center gap-2 active:scale-95"><Coins size={20}/> {currentBookingStatus === 'checked-out' ? 'บันทึกการแก้ไข' : 'บันทึกรับเงิน'}</button>
                             </div>
                             {remainingAfterCurrentPay > 0 && <p className="text-xs text-orange-500 text-right mt-2 font-bold">* จะเหลือค้างอีก {remainingAfterCurrentPay.toLocaleString()} บาท</p>}
                         </div>

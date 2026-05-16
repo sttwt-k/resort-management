@@ -1,0 +1,32 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // =====================================================
+    // Resort Management — Firebase Storage Rules
+    // =====================================================
+    // โครงสร้าง: bills/{docNo}/{timestamp}.jpg
+    // กฎ: ต้อง sign-in ถึงจะอ่าน/เขียนได้
+    // =====================================================
+
+    // ล็อกทุกอย่างก่อน
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+
+    // เปิดเฉพาะโฟลเดอร์ bills/ สำหรับ user ที่ล็อกอินแล้ว
+    match /bills/{docNo}/{fileName} {
+      // อ่านได้: ต้อง sign-in
+      allow read: if request.auth != null;
+
+      // เขียนได้: ต้อง sign-in + เป็นรูปภาพ + ขนาดไม่เกิน 5MB
+      allow create, update: if request.auth != null
+                            && request.resource.contentType.matches('image/.*')
+                            && request.resource.size <= 5 * 1024 * 1024;
+
+      // ลบได้: ต้อง sign-in
+      allow delete: if request.auth != null;
+    }
+  }
+}
