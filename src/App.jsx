@@ -144,8 +144,10 @@ export default function App() {
   const [tempForm, setTempForm] = useState({ guestName: '', price: 200, durationHours: 3, paymentMethod: 'เงินสด', keyDepositCollected: false });
   
   const [staffCheckInForm, setStaffCheckInForm] = useState({
+      guestName: '',
+      checkInTimeStr: getNowTimeStr(),
       totalPrice: 0,
-      nights: 1, 
+      nights: 1,
       paymentMethod: 'เงินสด',
       isReceiptNeeded: false,
       keyDepositCollected: false,
@@ -564,7 +566,7 @@ export default function App() {
                   if (status === 'occupied' || status === 'booked') return null;
                   return addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'bookings'), {
                       roomId: rId, roomName: room.name, roomPrice: room.price,
-                      guestName: 'รายวัน walk-in', phone: '',
+                      guestName: staffCheckInForm.guestName || 'walk-in', phone: '',
                       checkInDate: selectedDate,
                       checkOutDate: checkoutDate,
                       nights: checkInNights,
@@ -580,12 +582,14 @@ export default function App() {
                       docNo: generateSequentialDocNo('BK', selectedDate, bookings),
                       checkInDocNo: checkInDocNo,
                       checkInTime: Timestamp.now(),
+                      checkInTimeStr: staffCheckInForm.checkInTimeStr || '',
                       updatedAt: Timestamp.now(), updatedBy: 'staff-mode'
                   });
               }).filter(Boolean);
               if(batchPromises.length > 0) await Promise.all(batchPromises);
               showNotification(`เช็คอินเรียบร้อย (${checkInNights} คืน)`);
               setIsStaffCheckInModalOpen(false);
+              setStaffCheckInForm(prev => ({...prev, guestName: '', checkInTimeStr: getNowTimeStr(), billPhoto: null}));
               setSelectedStaffRooms([]);
           }
       } catch (e) {
@@ -1235,6 +1239,32 @@ export default function App() {
       return { total, occupied, booked, available: total - occupied - booked };
   }, [bookings, rooms, selectedDate]);
 
+  const occupancyData = useMemo(() => {
+    const [year, month] = reportMonth.split('-').map(Number);
+    const daysInMonth = new Date(year, month, 0).getDate();
+    const monthStart = `${reportMonth}-01`;
+    const monthEnd = `${reportMonth}-${String(daysInMonth).padStart(2, '0')}`;
+    return rooms.map(room => {
+      let occupiedNights = 0;
+      bookings.forEach(b => {
+        if (b.roomId !== room.id) return;
+        if (b.status !== 'occupied' && b.status !== 'checked-out') return;
+        const start = b.checkInDate >= monthStart ? b.checkInDate : monthStart;
+        const end = b.checkOutDate <= monthEnd ? b.checkOutDate : monthEnd;
+        const diff = (new Date(end) - new Date(start)) / (1000 * 60 * 60 * 24);
+        if (diff > 0) occupiedNights += diff;
+      });
+      const nights = Math.min(Math.round(occupiedNights), daysInMonth);
+      return {
+        roomName: room.name,
+        roomId: room.id,
+        occupiedNights: nights,
+        rate: Math.round((nights / daysInMonth) * 100),
+        daysInMonth,
+      };
+    }).sort((a, b) => b.rate - a.rate);
+  }, [rooms, bookings, reportMonth]);
+
   if (loading) return <div className="h-screen flex items-center justify-center text-emerald-600 font-bold bg-slate-100 animate-pulse">กำลังโหลดข้อมูล...</div>;
   if (!role) return <LoginScreen onLogin={setRole} />;
 
@@ -1658,6 +1688,10 @@ export default function App() {
                           onClick={() => { setReportViewMode('monthly'); setReportDayPopup(null); }}
                           className={`px-5 py-2.5 rounded-xl font-bold text-sm transition-all ${reportViewMode === 'monthly' ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
                       >รายเดือน</button>
+                      <button
+                          onClick={() => { setReportViewMode('occupancy'); setReportDayPopup(null); }}
+                          className={`px-5 py-2.5 rounded-xl font-bold text-sm transition-all ${reportViewMode === 'occupancy' ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
+                      >อัตราเข้าพัก</button>
                   </div>
 
                   {/* ===== WEEKLY TAB ===== */}
@@ -1885,6 +1919,36 @@ export default function App() {
                       </div>
                   )}
 
+                  {reportViewMode === 'occupancy' && (
+                      <div className="space-y-3 animate-fade-in">
+                          <p className="text-xs text-slate-400 mb-4">อัตราการเข้าพักแต่ละห้อง เดือน {reportMonth} ({occupancyData[0]?.daysInMonth || 30} วัน)</p>
+                          {occupancyData.map(room => (
+                              <div key={room.roomId} className="flex items-center gap-3">
+                                  <div className="w-20 text-xs font-bold text-slate-600 text-right shrink-0">{room.roomName}</div>
+                                  <div className="flex-1 bg-slate-100 rounded-full h-5 overflow-hidden">
+                                      <div
+                                          className="h-full rounded-full flex items-center justify-end pr-2 transition-all"
+                                          style={{
+                                              width: `${room.rate}%`,
+                                              minWidth: room.rate > 0 ? '28px' : '0',
+                                              background: room.rate >= 70 ? '#1D9E75' : room.rate >= 40 ? '#EF9F27' : '#E24B4A'
+                                          }}
+                                      >
+                                          {room.rate > 8 && <span className="text-[10px] font-bold text-white">{room.rate}%</span>}
+                                      </div>
+                                  </div>
+                                  <div className="w-20 text-xs text-slate-400 shrink-0">{room.occupiedNights}/{room.daysInMonth} คืน</div>
+                              </div>
+                          ))}
+                          <div className="mt-5 pt-4 border-t border-slate-100 flex gap-4 text-xs">
+                              <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full inline-block" style={{background:'#1D9E75'}}></span> 70%+ ดีมาก</span>
+                              <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full inline-block" style={{background:'#EF9F27'}}></span> 40–69% ปานกลาง</span>
+                              <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full inline-block" style={{background:'#E24B4A'}}></span> &lt;40% ต้องปรับปรุง</span>
+                          </div>
+                      </div>
+                  )}
+
+
                </div>
            </div>
         )}
@@ -2024,6 +2088,27 @@ export default function App() {
 
       <Modal isOpen={isStaffCheckInModalOpen} onClose={() => setIsStaffCheckInModalOpen(false)} title="ยืนยันการรับเงิน (Walk-in)">
           <div className="space-y-6">
+              <div className="grid grid-cols-2 gap-3">
+                  <div>
+                      <label className="block text-slate-500 font-bold mb-1.5 text-xs">ชื่อลูกค้า</label>
+                      <input
+                          type="text"
+                          placeholder="ชื่อ (ไม่บังคับ)"
+                          className="w-full p-2.5 bg-slate-50 border-0 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                          value={staffCheckInForm.guestName}
+                          onChange={e => setStaffCheckInForm({...staffCheckInForm, guestName: e.target.value})}
+                      />
+                  </div>
+                  <div>
+                      <label className="block text-slate-500 font-bold mb-1.5 text-xs">เวลาเช็คอิน</label>
+                      <input
+                          type="time"
+                          className="w-full p-2.5 bg-slate-50 border-0 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                          value={staffCheckInForm.checkInTimeStr}
+                          onChange={e => setStaffCheckInForm({...staffCheckInForm, checkInTimeStr: e.target.value})}
+                      />
+                  </div>
+              </div>
               <div className="bg-emerald-50 rounded-2xl p-6 border border-emerald-100 relative">
                   <div className="flex justify-between items-center mb-4 pb-4 border-b border-emerald-200/50">
                       <span className="font-bold text-emerald-800 flex items-center gap-2"><Moon size={18}/> จำนวนคืน</span>
