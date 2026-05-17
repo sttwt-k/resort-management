@@ -19,7 +19,7 @@ import {
   Settings, Trash2, Lock, Copy, FileText, User, 
   Shield, LogIn, Clock, CreditCard, Coins, ArrowRight, AlertCircle, Search, Car, Menu,
   MessageCircle, Send, LayoutList, ChevronRight, ChevronLeft, Smartphone, Gift, CheckSquare,
-  Receipt, Banknote, QrCode, Image as ImageIcon, Moon
+  Receipt, Banknote, QrCode, Image as ImageIcon, Moon, Package, Minus
 } from 'lucide-react';
 import { 
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell
@@ -170,6 +170,20 @@ export default function App() {
   const initialExpenseForm = { docNo: '', title: '', amount: '', category: 'ของใช้สิ้นเปลือง (สบู่/ทิชชู่)', date: formatDate(new Date()), note: '', payee: '', paymentMethod: 'เงินสด', customCategory: '' };
   const [expenseForm, setExpenseForm] = useState(initialExpenseForm);
   const [isExpenseModalOpen, setIsExpenseModalOpen] = useState(false);
+  // ── Consumables / Stock ──
+  const [consumables, setConsumables] = useState([]);
+  const [consumableLogs, setConsumableLogs] = useState([]);
+  const [isConsumableItemModalOpen, setIsConsumableItemModalOpen] = useState(false);
+  const [consumableItemForm, setConsumableItemForm] = useState({id:'', name:'', unit:'ชิ้น', costPerUnit:0, packUnit:'', unitsPerPack:0, minStock:5});
+  const [consumableItemFormMode, setConsumableItemFormMode] = useState('create');
+  const [isRestockModalOpen, setIsRestockModalOpen] = useState(false);
+  const [restockTarget, setRestockTarget] = useState(null);
+  const [restockQty, setRestockQty] = useState('');
+  const [restockIsPackUnit, setRestockIsPackUnit] = useState(false);
+  const [isUseConsumableModalOpen, setIsUseConsumableModalOpen] = useState(false);
+  const [usageTargetRoomId, setUsageTargetRoomId] = useState(null);
+  const [consumableUsageMap, setConsumableUsageMap] = useState({});
+  const [stockSubTab, setStockSubTab] = useState('items');
   const [expenseModalMode, setExpenseModalMode] = useState('create');
 
   // Derived State
@@ -306,7 +320,12 @@ export default function App() {
         (error) => console.error("Error fetching expenses:", error)
     );
 
-    return () => { unsubRooms(); unsubBookings(); unsubExpenses(); };
+    const qConsumables = query(collection(db, 'artifacts', appId, 'public', 'data', 'consumables'));
+    const unsubConsumables = onSnapshot(qConsumables, snap => setConsumables(snap.docs.map(d => ({id: d.id, ...d.data()}))));
+    const qConsumableLogs = query(collection(db, 'artifacts', appId, 'public', 'data', 'consumableLogs'));
+    const unsubConsumableLogs = onSnapshot(qConsumableLogs, snap => setConsumableLogs(snap.docs.map(d => ({id: d.id, ...d.data()}))));
+
+    return () => { unsubRooms(); unsubBookings(); unsubExpenses(); unsubConsumables(); unsubConsumableLogs(); };
   }, [user, useMockData]);
 
   const showNotification = (msg, type = 'success') => { setNotification({ message: msg, type }); setTimeout(() => setNotification(null), 3000); };
@@ -549,6 +568,7 @@ export default function App() {
               await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', booking.id), {
                   status: 'occupied',
                   checkInTime: Timestamp.now(),
+                  checkInTimeStr: getNowTimeStr(),
                   checkInDocNo: checkInDocNo,
                   keyDeposit: staffCheckInForm.keyDepositCollected ? 100 : 0,
                   totalPaid: (booking.totalPrice - booking.deposit) + (staffCheckInForm.keyDepositCollected ? 100 : 0),
@@ -582,7 +602,7 @@ export default function App() {
                       docNo: generateSequentialDocNo('BK', selectedDate, bookings),
                       checkInDocNo: checkInDocNo,
                       checkInTime: Timestamp.now(),
-                      checkInTimeStr: staffCheckInForm.checkInTimeStr || '',
+                      checkInTimeStr: getNowTimeStr(),
                       updatedAt: Timestamp.now(), updatedBy: 'staff-mode'
                   });
               }).filter(Boolean);
@@ -1050,6 +1070,93 @@ export default function App() {
     });
   };
 
+  // ── Consumable Handlers ──────────────────────────────────────────────────────
+  const openConsumableItemModal = (item = null) => {
+    if (item) {
+      setConsumableItemForm({id: item.id, name: item.name, unit: item.unit, costPerUnit: item.costPerUnit, packUnit: item.packUnit||'', unitsPerPack: item.unitsPerPack||0, minStock: item.minStock||5});
+      setConsumableItemFormMode('edit');
+    } else {
+      setConsumableItemForm({id:'', name:'', unit:'ชิ้น', costPerUnit:0, packUnit:'', unitsPerPack:0, minStock:5});
+      setConsumableItemFormMode('create');
+    }
+    setIsConsumableItemModalOpen(true);
+  };
+
+  const handleSaveConsumableItem = async (e) => {
+    e.preventDefault();
+    const payload = {
+      name: consumableItemForm.name, unit: consumableItemForm.unit,
+      costPerUnit: Number(consumableItemForm.costPerUnit),
+      packUnit: consumableItemForm.packUnit,
+      unitsPerPack: Number(consumableItemForm.unitsPerPack)||0,
+      minStock: Number(consumableItemForm.minStock)||0,
+    };
+    try {
+      if (consumableItemFormMode === 'create') {
+        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'consumables'), {...payload, stockQty: 0, createdAt: Timestamp.now()});
+        showNotification('เพิ่มรายการแล้ว');
+      } else {
+        await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'consumables', consumableItemForm.id), payload);
+        showNotification('บันทึกการแก้ไขแล้ว');
+      }
+      setIsConsumableItemModalOpen(false);
+    } catch(e) { showNotification('เกิดข้อผิดพลาด', 'error'); }
+  };
+
+  const handleDeleteConsumableItem = () => {
+    showConfirm({ title: 'ลบรายการ', message: `ลบ "${consumableItemForm.name}" ออกจากระบบ?`, variant: 'danger', confirmLabel: 'ลบ',
+      onConfirm: async () => {
+        try {
+          await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'consumables', consumableItemForm.id));
+          showNotification('ลบแล้ว'); setIsConsumableItemModalOpen(false);
+        } catch(e) { showNotification('ลบไม่สำเร็จ', 'error'); }
+      }
+    });
+  };
+
+  const openRestockModal = (item) => { setRestockTarget(item); setRestockQty(''); setRestockIsPackUnit(false); setIsRestockModalOpen(true); };
+
+  const handleRestock = async () => {
+    if (!restockTarget || !restockQty) return;
+    const unitsToAdd = restockIsPackUnit ? Number(restockQty) * (restockTarget.unitsPerPack||1) : Number(restockQty);
+    const costForLog = unitsToAdd * (restockTarget.costPerUnit||0);
+    try {
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'consumables', restockTarget.id), { stockQty: (restockTarget.stockQty||0) + unitsToAdd });
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'consumableLogs'), {
+        consumableId: restockTarget.id, consumableName: restockTarget.name,
+        qty: unitsToAdd, unit: restockTarget.unit, logType: 'restock',
+        date: selectedDate, cost: costForLog,
+        note: restockIsPackUnit ? `เติม ${restockQty} ${restockTarget.packUnit}` : '',
+        createdAt: Timestamp.now(),
+      });
+      showNotification(`เติมสต๊อก ${unitsToAdd} ${restockTarget.unit}`); setIsRestockModalOpen(false);
+    } catch(e) { showNotification('เกิดข้อผิดพลาด', 'error'); }
+  };
+
+  const openUseConsumableModal = (roomId) => { setUsageTargetRoomId(roomId); setConsumableUsageMap({}); setIsUseConsumableModalOpen(true); };
+
+  const handleRecordUsage = async () => {
+    const entries = Object.entries(consumableUsageMap).filter(([, qty]) => Number(qty) > 0);
+    if (entries.length === 0) { showNotification('ยังไม่ได้ใส่จำนวน', 'error'); return; }
+    const room = rooms.find(r => r.id === usageTargetRoomId);
+    try {
+      await Promise.all(entries.flatMap(([cId, qty]) => {
+        const item = consumables.find(c => c.id === cId);
+        if (!item) return [];
+        const numQty = Number(qty);
+        return [
+          updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'consumables', cId), { stockQty: Math.max(0, (item.stockQty||0) - numQty) }),
+          addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'consumableLogs'), {
+            consumableId: cId, consumableName: item.name, qty: numQty, unit: item.unit,
+            logType: 'use', roomId: usageTargetRoomId, roomName: room?.name||'',
+            date: selectedDate, cost: numQty * (item.costPerUnit||0), note: '', createdAt: Timestamp.now(),
+          }),
+        ];
+      }));
+      showNotification('บันทึกของใช้เรียบร้อย'); setIsUseConsumableModalOpen(false);
+    } catch(e) { showNotification('เกิดข้อผิดพลาด', 'error'); }
+  };
+
   // ✅ BUG FIX 3: Report Logic — roomRevenue now accumulates from daily loop (consistent with line chart)
   // and reportBookings counts pro-rated revenue for cross-month bookings
   const reportData = useMemo(() => {
@@ -1306,6 +1413,7 @@ export default function App() {
                     <button onClick={() => setCurrentView('customers')} className={`px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-all ${currentView === 'customers' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}><Users size={18} /> <span className="hidden md:inline">ลูกค้า</span></button>
                     <button onClick={() => setCurrentView('expenses')} className={`px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-all ${currentView === 'expenses' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}><Wallet size={18} /> <span className="hidden md:inline">รายจ่าย</span></button>
                     <button onClick={() => setCurrentView('report')} className={`px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-all ${currentView === 'report' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}><BarChart2 size={18} /> <span className="hidden md:inline">รายงาน</span></button>
+                    <button onClick={() => setCurrentView('stock')} className={`px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-all ${currentView === 'stock' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}><Package size={18} /> <span className="hidden md:inline">สต๊อก</span></button>
                   </div>
               )}
               {role === 'staff' && (
@@ -1355,6 +1463,7 @@ export default function App() {
                         <button onClick={() => {setCurrentView('customers'); setIsMobileMenuOpen(false);}} className={`p-4 rounded-xl text-lg font-bold flex items-center gap-3 ${currentView === 'customers' ? 'bg-emerald-50 text-emerald-600' : 'text-slate-500'}`}><Users size={24} /> ข้อมูลลูกค้า</button>
                         <button onClick={() => {setCurrentView('expenses'); setIsMobileMenuOpen(false);}} className={`p-4 rounded-xl text-lg font-bold flex items-center gap-3 ${currentView === 'expenses' ? 'bg-emerald-50 text-emerald-600' : 'text-slate-500'}`}><Wallet size={24} /> รายจ่าย</button>
                         <button onClick={() => {setCurrentView('report'); setIsMobileMenuOpen(false);}} className={`p-4 rounded-xl text-lg font-bold flex items-center gap-3 ${currentView === 'report' ? 'bg-emerald-50 text-emerald-600' : 'text-slate-500'}`}><BarChart2 size={24} /> รายงาน</button>
+                        <button onClick={() => {setCurrentView('stock'); setIsMobileMenuOpen(false);}} className={`p-4 rounded-xl text-lg font-bold flex items-center gap-3 ${currentView === 'stock' ? 'bg-emerald-50 text-emerald-600' : 'text-slate-500'}`}><Package size={24} /> สต๊อกของใช้</button>
                         <hr className="my-2 border-slate-100"/>
                         <button onClick={() => {setIsRoomSettingsOpen(true); setIsMobileMenuOpen(false);}} className="p-4 rounded-xl text-lg font-bold flex items-center gap-3 text-slate-500"><Settings size={24}/> ตั้งค่า</button>
                     </>
@@ -1464,6 +1573,11 @@ export default function App() {
                             )}
                             {booking?.checkInTimeStr && status === 'occupied' && (
                                 <p className="text-[10px] text-blue-400 font-bold">เข้า {booking.checkInTimeStr} น.</p>
+                            )}
+                            {role === 'staff' && status === 'occupied' && consumables.length > 0 && (
+                                <button onClick={(e) => { e.stopPropagation(); openUseConsumableModal(room.id); }} className="mt-1 text-[10px] bg-purple-100 text-purple-700 px-2 py-1 rounded-lg font-bold border border-purple-200 hover:bg-purple-200 flex items-center gap-1 mx-auto">
+                                    <Package size={10}/> ของใช้
+                                </button>
                             )}
                             {booking?.checkOutDate && (
                                 <p className="text-[10px] md:text-xs text-slate-500 font-bold bg-slate-100 px-2 py-1 rounded-md mt-1 border border-slate-200">
@@ -1640,6 +1754,147 @@ export default function App() {
                 </table>
              </div>
            </div>
+        )}
+
+        {currentView === 'stock' && (
+          <div className="space-y-6 animate-fade-in">
+            <div className="flex justify-between items-center">
+              <h2 className="text-2xl font-black text-slate-800 flex items-center gap-3"><Package className="text-emerald-500"/> สต๊อกของใช้</h2>
+              {stockSubTab === 'items' && (
+                <button onClick={() => openConsumableItemModal()} className="bg-emerald-600 text-white px-5 py-2.5 rounded-xl shadow-lg shadow-emerald-200 hover:bg-emerald-700 flex items-center gap-2 font-bold transition-all hover:-translate-y-1">
+                  <Plus size={18}/> เพิ่มรายการ
+                </button>
+              )}
+            </div>
+
+            {/* Sub-tabs */}
+            <div className="bg-white/80 p-1.5 rounded-2xl inline-flex gap-1 shadow-sm border border-white">
+              <button onClick={() => setStockSubTab('items')} className={`px-5 py-2.5 rounded-xl font-bold text-sm transition-all ${stockSubTab === 'items' ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}>รายการสต๊อก</button>
+              <button onClick={() => setStockSubTab('logs')} className={`px-5 py-2.5 rounded-xl font-bold text-sm transition-all ${stockSubTab === 'logs' ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}>ประวัติ</button>
+            </div>
+
+            {stockSubTab === 'items' && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {consumables.length === 0 && (
+                  <div className="col-span-full text-center py-20 text-slate-400">
+                    <Package size={52} className="mx-auto mb-4 opacity-25"/>
+                    <p className="font-bold text-lg">ยังไม่มีรายการสต๊อก</p>
+                    <p className="text-sm mt-1">กด <strong>+ เพิ่มรายการ</strong> เพื่อเริ่มต้นใช้งาน</p>
+                  </div>
+                )}
+                {[...consumables].sort((a,b) => (a.name||'').localeCompare(b.name||'')).map(item => {
+                  const stock = item.stockQty || 0;
+                  const isOut = stock <= 0;
+                  const isLow = !isOut && stock <= (item.minStock || 0);
+                  const stockStyle = isOut
+                    ? 'border-red-200 bg-red-50 text-red-700'
+                    : isLow
+                    ? 'border-amber-200 bg-amber-50 text-amber-700'
+                    : 'border-emerald-200 bg-emerald-50 text-emerald-700';
+                  return (
+                    <div key={item.id} className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 space-y-4 hover:shadow-md transition-shadow flex flex-col">
+                      <div className="flex justify-between items-start">
+                        <div className="flex-1 min-w-0">
+                          <h3 className="font-bold text-slate-800 text-lg leading-tight">{item.name}</h3>
+                          <p className="text-xs text-slate-400 mt-0.5">
+                            {item.costPerUnit?.toLocaleString()} ฿/{item.unit}
+                            {item.packUnit && item.unitsPerPack > 0 && ` · ${item.unitsPerPack} ${item.unit}/${item.packUnit}`}
+                          </p>
+                        </div>
+                        <button onClick={() => openConsumableItemModal(item)} className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-xl transition-colors ml-2 flex-shrink-0">
+                          <Edit size={16}/>
+                        </button>
+                      </div>
+
+                      <div className={`rounded-xl border px-4 py-3 ${stockStyle}`}>
+                        <div className="flex justify-between items-center">
+                          <span className="text-sm font-bold opacity-75">คงเหลือ</span>
+                          <span className="text-3xl font-black">{stock} <span className="text-sm font-bold">{item.unit}</span></span>
+                        </div>
+                        {item.packUnit && item.unitsPerPack > 0 && (
+                          <p className="text-xs text-right opacity-60 mt-0.5">≈ {(stock / item.unitsPerPack).toFixed(1)} {item.packUnit}</p>
+                        )}
+                        {(isOut || isLow) && (
+                          <p className="text-xs font-bold mt-1.5 flex items-center gap-1">
+                            <AlertCircle size={12}/>
+                            {isOut ? 'หมดแล้ว — ต้องเติมสต๊อก' : `ใกล้หมด (แจ้งเตือน < ${item.minStock} ${item.unit})`}
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2 mt-auto pt-1">
+                        <button onClick={() => openRestockModal(item)} className="py-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-1.5">
+                          <Plus size={15}/> เติมสต๊อก
+                        </button>
+                        <button onClick={() => { setUsageTargetRoomId(null); setConsumableUsageMap({}); setIsUseConsumableModalOpen(true); }} className="py-2.5 bg-orange-50 hover:bg-orange-100 text-orange-700 border border-orange-200 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-1.5">
+                          <Minus size={15}/> บันทึกใช้
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {stockSubTab === 'logs' && (
+              <div className="space-y-4">
+                {/* Cost summary */}
+                {consumableLogs.length > 0 && (() => {
+                  const usageLogs = consumableLogs.filter(l => l.logType === 'use');
+                  const totalCost = usageLogs.reduce((s,l) => s + (l.cost||0), 0);
+                  const thisMonthCost = usageLogs.filter(l => l.date?.startsWith(reportMonth)).reduce((s,l) => s + (l.cost||0), 0);
+                  return (
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="bg-orange-50 border border-orange-200 rounded-2xl p-4 text-center">
+                        <p className="text-xs font-bold text-orange-600 uppercase tracking-wider mb-1">ต้นทุนเดือนนี้</p>
+                        <p className="text-2xl font-black text-orange-700">{thisMonthCost.toLocaleString()} ฿</p>
+                      </div>
+                      <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-center">
+                        <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">ต้นทุนทั้งหมด</p>
+                        <p className="text-2xl font-black text-slate-700">{totalCost.toLocaleString()} ฿</p>
+                      </div>
+                    </div>
+                  );
+                })()}
+                <div className="bg-white rounded-[1.5rem] shadow-sm border border-slate-100 overflow-x-auto">
+                  <table className="w-full text-sm text-left text-slate-600 min-w-[520px]">
+                    <thead className="bg-slate-50 text-slate-500 uppercase text-xs font-bold tracking-wider">
+                      <tr>
+                        <th className="px-5 py-4">วันที่</th>
+                        <th className="px-5 py-4">รายการ</th>
+                        <th className="px-5 py-4">ห้อง</th>
+                        <th className="px-5 py-4 text-center">จำนวน</th>
+                        <th className="px-5 py-4 text-right">ต้นทุน</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-50">
+                      {[...consumableLogs].sort((a,b) => (b.createdAt?.seconds||0) - (a.createdAt?.seconds||0)).slice(0,150).map(log => (
+                        <tr key={log.id} className="hover:bg-slate-50/50 transition-colors">
+                          <td className="px-5 py-3 text-xs text-slate-500 font-mono">{log.date}</td>
+                          <td className="px-5 py-3">
+                            <span className="font-medium text-slate-800">{log.consumableName}</span>
+                            <span className={`ml-2 text-[10px] px-2 py-0.5 rounded-full font-bold ${log.logType === 'restock' ? 'bg-emerald-100 text-emerald-700' : 'bg-orange-100 text-orange-700'}`}>
+                              {log.logType === 'restock' ? 'เติม' : 'ใช้'}
+                            </span>
+                          </td>
+                          <td className="px-5 py-3 text-xs text-slate-500">{log.roomName || '-'}</td>
+                          <td className="px-5 py-3 text-center">
+                            <span className={`font-bold ${log.logType === 'restock' ? 'text-emerald-600' : 'text-orange-600'}`}>
+                              {log.logType === 'restock' ? '+' : '-'}{log.qty} {log.unit}
+                            </span>
+                          </td>
+                          <td className="px-5 py-3 text-right font-medium">{(log.cost||0).toLocaleString()} ฿</td>
+                        </tr>
+                      ))}
+                      {consumableLogs.length === 0 && (
+                        <tr><td colSpan="5" className="px-5 py-16 text-center text-slate-400">ยังไม่มีประวัติ</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
         )}
 
         {currentView === 'report' && (
@@ -2088,26 +2343,15 @@ export default function App() {
 
       <Modal isOpen={isStaffCheckInModalOpen} onClose={() => setIsStaffCheckInModalOpen(false)} title="ยืนยันการรับเงิน (Walk-in)">
           <div className="space-y-6">
-              <div className="grid grid-cols-2 gap-3">
-                  <div>
-                      <label className="block text-slate-500 font-bold mb-1.5 text-xs">ชื่อลูกค้า</label>
-                      <input
-                          type="text"
-                          placeholder="ชื่อ (ไม่บังคับ)"
-                          className="w-full p-2.5 bg-slate-50 border-0 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
-                          value={staffCheckInForm.guestName}
-                          onChange={e => setStaffCheckInForm({...staffCheckInForm, guestName: e.target.value})}
-                      />
-                  </div>
-                  <div>
-                      <label className="block text-slate-500 font-bold mb-1.5 text-xs">เวลาเช็คอิน</label>
-                      <input
-                          type="time"
-                          className="w-full p-2.5 bg-slate-50 border-0 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
-                          value={staffCheckInForm.checkInTimeStr}
-                          onChange={e => setStaffCheckInForm({...staffCheckInForm, checkInTimeStr: e.target.value})}
-                      />
-                  </div>
+              <div>
+                  <label className="block text-slate-500 font-bold mb-1.5 text-xs">ชื่อลูกค้า (ไม่บังคับ)</label>
+                  <input
+                      type="text"
+                      placeholder="ชื่อ หรือเว้นว่างเพื่อใช้ walk-in"
+                      className="w-full p-3 bg-slate-50 border-0 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                      value={staffCheckInForm.guestName}
+                      onChange={e => setStaffCheckInForm({...staffCheckInForm, guestName: e.target.value})}
+                  />
               </div>
               <div className="bg-emerald-50 rounded-2xl p-6 border border-emerald-100 relative">
                   <div className="flex justify-between items-center mb-4 pb-4 border-b border-emerald-200/50">
@@ -2483,6 +2727,169 @@ export default function App() {
                 </div>
             )}
          </div>
+      </Modal>
+
+      {/* ─── Consumable Item Modal (Add / Edit) ───────────────────────────────── */}
+      <Modal isOpen={isConsumableItemModalOpen} onClose={() => setIsConsumableItemModalOpen(false)} title={consumableItemFormMode === 'create' ? 'เพิ่มรายการของใช้' : 'แก้ไขรายการ'}>
+        <form onSubmit={handleSaveConsumableItem} className="space-y-4 text-sm font-sans">
+          <div>
+            <label className="block text-slate-500 font-bold mb-1.5 text-xs">ชื่อรายการ</label>
+            <input required type="text" placeholder="เช่น สบู่ก้อน, กระดาษทิชชู่" className="w-full p-3 bg-slate-50 border-0 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none" value={consumableItemForm.name} onChange={e => setConsumableItemForm({...consumableItemForm, name: e.target.value})} />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-slate-500 font-bold mb-1.5 text-xs">หน่วยนับหลัก</label>
+              <input required type="text" placeholder="ก้อน / หลอด / ชิ้น" className="w-full p-3 bg-slate-50 border-0 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none" value={consumableItemForm.unit} onChange={e => setConsumableItemForm({...consumableItemForm, unit: e.target.value})} />
+            </div>
+            <div>
+              <label className="block text-slate-500 font-bold mb-1.5 text-xs">ต้นทุน/หน่วย (฿)</label>
+              <input required type="number" min="0" step="0.01" className="w-full p-3 bg-slate-50 border-0 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none text-red-500 font-bold" value={consumableItemForm.costPerUnit} onChange={e => setConsumableItemForm({...consumableItemForm, costPerUnit: e.target.value})} />
+            </div>
+          </div>
+          <div className="bg-slate-50 p-4 rounded-xl space-y-3 border border-slate-100">
+            <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">หน่วยแพ็ค (ไม่บังคับ)</p>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-slate-500 font-bold mb-1.5 text-xs">ชื่อหน่วยแพ็ค</label>
+                <input type="text" placeholder="โหล / แพ็ค / ลัง" className="w-full p-2.5 bg-white border-0 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none shadow-sm" value={consumableItemForm.packUnit} onChange={e => setConsumableItemForm({...consumableItemForm, packUnit: e.target.value})} />
+              </div>
+              <div>
+                <label className="block text-slate-500 font-bold mb-1.5 text-xs">จำนวนต่อแพ็ค</label>
+                <input type="number" min="0" placeholder="12" className="w-full p-2.5 bg-white border-0 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none shadow-sm" value={consumableItemForm.unitsPerPack || ''} onChange={e => setConsumableItemForm({...consumableItemForm, unitsPerPack: e.target.value})} />
+              </div>
+            </div>
+            {consumableItemForm.packUnit && consumableItemForm.unitsPerPack > 0 && (
+              <p className="text-xs text-emerald-600 font-bold">
+                1 {consumableItemForm.packUnit} = {consumableItemForm.unitsPerPack} {consumableItemForm.unit || 'หน่วย'} · ราคา {(consumableItemForm.costPerUnit * consumableItemForm.unitsPerPack).toLocaleString()} ฿
+              </p>
+            )}
+          </div>
+          <div>
+            <label className="block text-slate-500 font-bold mb-1.5 text-xs">แจ้งเตือนเมื่อเหลือน้อยกว่า</label>
+            <div className="flex items-center gap-2">
+              <input type="number" min="0" className="w-28 p-3 bg-slate-50 border-0 rounded-xl focus:ring-2 focus:ring-amber-400 outline-none font-bold" value={consumableItemForm.minStock} onChange={e => setConsumableItemForm({...consumableItemForm, minStock: e.target.value})} />
+              <span className="text-sm text-slate-400 font-medium">{consumableItemForm.unit || 'หน่วย'}</span>
+            </div>
+          </div>
+          <div className="flex gap-2 pt-2">
+            {consumableItemFormMode === 'edit' && (
+              <button type="button" onClick={handleDeleteConsumableItem} className="px-4 bg-red-50 text-red-500 rounded-xl font-bold hover:bg-red-100 transition-colors">ลบ</button>
+            )}
+            <button type="submit" className="flex-1 py-3 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700 shadow-lg shadow-emerald-200 transition-all active:scale-95">
+              {consumableItemFormMode === 'create' ? 'เพิ่มรายการ' : 'บันทึกการแก้ไข'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* ─── Restock Modal ──────────────────────────────────────────────────────── */}
+      <Modal isOpen={isRestockModalOpen} onClose={() => setIsRestockModalOpen(false)} title={`เติมสต๊อก — ${restockTarget?.name || ''}`}>
+        {restockTarget && (
+          <div className="space-y-5">
+            <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 flex justify-between items-center">
+              <span className="text-sm font-bold text-emerald-700">คงเหลือปัจจุบัน</span>
+              <span className="text-2xl font-black text-emerald-700">{restockTarget.stockQty || 0} {restockTarget.unit}</span>
+            </div>
+            {restockTarget.packUnit && restockTarget.unitsPerPack > 0 && (
+              <div className="flex gap-2">
+                <button onClick={() => setRestockIsPackUnit(false)} className={`flex-1 py-2.5 rounded-xl font-bold text-sm border-2 transition-all ${!restockIsPackUnit ? 'border-emerald-500 bg-emerald-50 text-emerald-700' : 'border-slate-200 text-slate-400'}`}>
+                  นับ{restockTarget.unit}
+                </button>
+                <button onClick={() => setRestockIsPackUnit(true)} className={`flex-1 py-2.5 rounded-xl font-bold text-sm border-2 transition-all ${restockIsPackUnit ? 'border-emerald-500 bg-emerald-50 text-emerald-700' : 'border-slate-200 text-slate-400'}`}>
+                  นับ{restockTarget.packUnit}
+                </button>
+              </div>
+            )}
+            <div>
+              <label className="block text-slate-500 font-bold mb-2 text-xs">
+                จำนวนที่เติม ({restockIsPackUnit ? restockTarget.packUnit : restockTarget.unit})
+              </label>
+              <input
+                type="number" min="1" autoFocus
+                className="w-full p-4 text-center text-3xl font-black bg-slate-50 border-0 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none"
+                value={restockQty} onChange={e => setRestockQty(e.target.value)}
+                placeholder="0"
+              />
+              {restockIsPackUnit && restockQty > 0 && (
+                <p className="text-sm text-emerald-600 font-bold text-center mt-2">
+                  = {Number(restockQty) * restockTarget.unitsPerPack} {restockTarget.unit}
+                </p>
+              )}
+            </div>
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-500 space-y-1">
+              <div className="flex justify-between"><span>ต้นทุนต่อหน่วย</span><span className="font-bold">{restockTarget.costPerUnit?.toLocaleString()} ฿/{restockTarget.unit}</span></div>
+              {restockQty > 0 && (
+                <div className="flex justify-between text-emerald-600 font-bold border-t border-slate-200 pt-1 mt-1">
+                  <span>มูลค่าที่เติม</span>
+                  <span>
+                    {((restockIsPackUnit ? Number(restockQty)*restockTarget.unitsPerPack : Number(restockQty)) * restockTarget.costPerUnit).toLocaleString()} ฿
+                  </span>
+                </div>
+              )}
+            </div>
+            <button onClick={handleRestock} disabled={!restockQty || Number(restockQty) <= 0} className="w-full py-4 bg-emerald-600 text-white rounded-2xl font-bold text-lg shadow-lg shadow-emerald-200 hover:bg-emerald-700 active:scale-95 transition-all disabled:opacity-40">
+              ยืนยันเติมสต๊อก
+            </button>
+          </div>
+        )}
+      </Modal>
+
+      {/* ─── Use Consumable Modal ───────────────────────────────────────────────── */}
+      <Modal isOpen={isUseConsumableModalOpen} onClose={() => setIsUseConsumableModalOpen(false)} title="บันทึกของใช้">
+        <div className="space-y-4">
+          {consumables.length === 0 ? (
+            <p className="text-center text-slate-400 py-8">ยังไม่มีรายการของใช้</p>
+          ) : (
+            <>
+              <div>
+                <label className="block text-slate-500 font-bold mb-2 text-xs">ห้องที่บันทึก (ไม่บังคับ)</label>
+                <select className="w-full p-2.5 bg-slate-50 border-0 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 outline-none" value={usageTargetRoomId || ''} onChange={e => setUsageTargetRoomId(e.target.value||null)}>
+                  <option value="">-- ไม่ระบุห้อง --</option>
+                  {rooms.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                </select>
+              </div>
+              <div className="space-y-2 max-h-64 overflow-y-auto pr-1 custom-scrollbar">
+                {[...consumables].sort((a,b) => (a.name||'').localeCompare(b.name||'')).map(item => (
+                  <div key={item.id} className="flex items-center justify-between bg-slate-50 rounded-xl px-4 py-3 border border-slate-100">
+                    <div className="flex-1 min-w-0">
+                      <p className="font-bold text-slate-800 text-sm truncate">{item.name}</p>
+                      <p className="text-xs text-slate-400">คงเหลือ {item.stockQty || 0} {item.unit} · {item.costPerUnit} ฿/{item.unit}</p>
+                    </div>
+                    <div className="flex items-center gap-2 ml-3 flex-shrink-0">
+                      <button onClick={() => setConsumableUsageMap(m => ({...m, [item.id]: Math.max(0, (Number(m[item.id])||0) - 1)}))} className="w-7 h-7 rounded-full bg-white border border-slate-200 flex items-center justify-center text-slate-500 hover:bg-slate-100 font-bold text-lg leading-none shadow-sm">−</button>
+                      <input
+                        type="number" min="0"
+                        className="w-14 text-center font-black text-lg bg-white border border-slate-200 rounded-xl p-1 focus:ring-2 focus:ring-emerald-400 outline-none"
+                        value={consumableUsageMap[item.id] || ''}
+                        placeholder="0"
+                        onChange={e => setConsumableUsageMap(m => ({...m, [item.id]: e.target.value}))}
+                      />
+                      <span className="text-xs text-slate-400 w-8">{item.unit}</span>
+                      <button onClick={() => setConsumableUsageMap(m => ({...m, [item.id]: (Number(m[item.id])||0) + 1}))} className="w-7 h-7 rounded-full bg-emerald-500 text-white flex items-center justify-center font-bold text-lg leading-none shadow-sm hover:bg-emerald-600">+</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {Object.values(consumableUsageMap).some(v => Number(v) > 0) && (
+                <div className="bg-orange-50 border border-orange-200 rounded-xl p-3 text-xs">
+                  <p className="font-bold text-orange-700 mb-1">สรุปต้นทุน</p>
+                  {Object.entries(consumableUsageMap).filter(([,v]) => Number(v)>0).map(([cId, qty]) => {
+                    const item = consumables.find(c => c.id === cId);
+                    if (!item) return null;
+                    return <div key={cId} className="flex justify-between text-orange-600"><span>{item.name} × {qty} {item.unit}</span><span>{(Number(qty)*item.costPerUnit).toLocaleString()} ฿</span></div>;
+                  })}
+                  <div className="border-t border-orange-200 mt-2 pt-2 flex justify-between font-bold text-orange-700">
+                    <span>รวม</span>
+                    <span>{Object.entries(consumableUsageMap).reduce((s,[cId,qty]) => { const item=consumables.find(c=>c.id===cId); return s+(Number(qty)*(item?.costPerUnit||0)); }, 0).toLocaleString()} ฿</span>
+                  </div>
+                </div>
+              )}
+              <button onClick={handleRecordUsage} className="w-full py-4 bg-orange-500 text-white rounded-2xl font-bold text-lg shadow-lg shadow-orange-200 hover:bg-orange-600 active:scale-95 transition-all">
+                บันทึกการใช้
+              </button>
+            </>
+          )}
+        </div>
       </Modal>
 
       <Modal isOpen={isExpenseModalOpen} onClose={() => setIsExpenseModalOpen(false)} title={expenseModalMode === 'create' ? `บันทึกรายจ่าย` : `แก้ไขรายจ่าย`}>
