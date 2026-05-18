@@ -37,7 +37,7 @@ if (!document.getElementById('custom-font-style')) {
     @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
     .animate-fade-in { animation: fadeIn 0.3s ease-out forwards; }
     
-    @keyframes slideUp { from { transform: translate(-50%, 100%); } to { transform: translate(-50%, 0); } }
+    @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
     .animate-slide-up { animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
 
     .glass-panel { background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.5); }
@@ -1243,7 +1243,7 @@ export default function App() {
 
   // --- Purchase Session (multi-item) ---
   const openPurchaseSession = () => {
-    setPurchaseSession({ store: '', date: formatDate(new Date()), items: [{ consumableId: '', qty: '', totalCost: '', note: '' }] });
+    setPurchaseSession({ store: '', date: formatDate(new Date()), items: [{ consumableId: '', qty: '', conversionFactor: '1', totalCost: '', note: '' }] });
     setIsPurchaseSessionOpen(true);
   };
 
@@ -1259,7 +1259,8 @@ export default function App() {
         const item = consumables.find(c => c.id === it.consumableId);
         if (!item) continue;
         const rawQty = Number(it.qty);
-        const unitsToAdd = rawQty; // already in base unit
+        const convFactor = Math.max(1, Number(it.conversionFactor) || 1);
+        const unitsToAdd = rawQty * convFactor; // convert purchase units → base units
         const totalCost = Number(it.totalCost);
         const ppu = unitsToAdd > 0 ? totalCost / unitsToAdd : 0;
         const currentMain = item.mainStock ?? item.stockQty ?? 0;
@@ -1303,14 +1304,38 @@ export default function App() {
     if (!editLogTarget) return;
     if (useMockData) { showNotification('โหมดตัวอย่าง: แก้ไขสำเร็จ'); setIsEditLogModalOpen(false); return; }
     try {
+      const oldQty = Number(editLogTarget.qty);
+      const newQty = Number(editLogForm.qty);
+      const delta  = newQty - oldQty;
+      // Update the log record
       await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'consumableLogs', editLogTarget.id), {
-        qty: Number(editLogForm.qty),
+        qty: newQty,
         cost: Number(editLogForm.cost),
         date: editLogForm.date,
         note: editLogForm.note,
       });
-      showNotification('แก้ไขประวัติแล้ว ✅'); setIsEditLogModalOpen(false);
-    } catch(e) { showNotification('เกิดข้อผิดพลาด', 'error'); }
+      // Adjust the consumable stock to reflect the qty change
+      if (delta !== 0) {
+        const item = consumables.find(c => c.id === editLogTarget.consumableId);
+        if (item) {
+          const currentMain = item.mainStock ?? item.stockQty ?? 0;
+          const currentRoom = item.roomStock ?? 0;
+          let updates = {};
+          if (editLogTarget.logType === 'purchase') {
+            updates.mainStock = Math.max(0, currentMain + delta);
+          } else if (editLogTarget.logType === 'use') {
+            updates.mainStock = Math.max(0, currentMain - delta);
+          } else if (editLogTarget.logType === 'transfer') {
+            updates.mainStock = Math.max(0, currentMain - delta);
+            updates.roomStock  = Math.max(0, currentRoom + delta);
+          }
+          if (Object.keys(updates).length > 0) {
+            await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'consumables', item.id), updates);
+          }
+        }
+      }
+      showNotification('แก้ไขประวัติและอัพเดตสต๊อกแล้ว ✅'); setIsEditLogModalOpen(false);
+    } catch(e) { console.error(e); showNotification('เกิดข้อผิดพลาด', 'error'); }
   };
 
   const handleDeleteLog = async () => {
@@ -1318,6 +1343,24 @@ export default function App() {
     showConfirm({ title: 'ลบประวัติ', message: `ลบรายการนี้ออกจากประวัติ?`, variant: 'danger', confirmLabel: 'ลบ',
       onConfirm: async () => {
         try {
+          const item = consumables.find(c => c.id === editLogTarget.consumableId);
+          if (item) {
+            const oldQty = Number(editLogTarget.qty);
+            const currentMain = item.mainStock ?? item.stockQty ?? 0;
+            const currentRoom = item.roomStock ?? 0;
+            let updates = {};
+            if (editLogTarget.logType === 'purchase') {
+              updates.mainStock = Math.max(0, currentMain - oldQty);
+            } else if (editLogTarget.logType === 'use') {
+              updates.mainStock = currentMain + oldQty;
+            } else if (editLogTarget.logType === 'transfer') {
+              updates.mainStock = currentMain + oldQty;
+              updates.roomStock  = Math.max(0, currentRoom - oldQty);
+            }
+            if (Object.keys(updates).length > 0) {
+              await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'consumables', item.id), updates);
+            }
+          }
           await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'consumableLogs', editLogTarget.id));
           showNotification('ลบแล้ว'); setIsEditLogModalOpen(false);
         } catch(e) { showNotification('ลบไม่สำเร็จ','error'); }
@@ -3188,8 +3231,11 @@ export default function App() {
             <div className="space-y-2">
               {purchaseSession.items.map((it, idx) => {
                 const selItem = consumables.find(c => c.id === it.consumableId);
-                const ppu = selItem && Number(it.qty) > 0 && Number(it.totalCost) > 0
-                  ? (Number(it.totalCost) / Number(it.qty)).toFixed(2) : null;
+                const convFactor = Math.max(1, Number(it.conversionFactor) || 1);
+                const totalBaseUnits = Number(it.qty) * convFactor;
+                const ppu = selItem && totalBaseUnits > 0 && Number(it.totalCost) > 0
+                  ? (Number(it.totalCost) / totalBaseUnits).toFixed(2) : null;
+                const isConverted = convFactor > 1;
                 return (
                   <div key={idx} className="bg-slate-50 rounded-2xl p-3 space-y-2">
                     <div className="flex gap-2 items-start">
@@ -3212,14 +3258,27 @@ export default function App() {
                         </button>
                       )}
                     </div>
-                    <div className="grid grid-cols-2 gap-2">
+                    {/* Qty + Conversion + Price */}
+                    <div className="grid grid-cols-3 gap-2">
                       <div>
-                        <label className="block text-[10px] font-bold text-slate-400 mb-1">จำนวน {selItem ? `(${selItem.unit})` : ''}</label>
+                        <label className="block text-[10px] font-bold text-slate-400 mb-1">จำนวนที่ซื้อ</label>
                         <input type="number" min="0" placeholder="0" className="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-sm font-bold text-center focus:ring-2 focus:ring-emerald-500 outline-none"
                           value={it.qty}
                           onChange={e => setPurchaseSession(s => {
                             const items = [...s.items];
                             items[idx] = {...items[idx], qty: e.target.value};
+                            return {...s, items};
+                          })}/>
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-400 mb-1">
+                          {selItem ? `${selItem.unit}/หน่วยซื้อ` : 'หน่วยนับ'}
+                        </label>
+                        <input type="number" min="1" placeholder="1" className="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-sm font-bold text-center focus:ring-2 focus:ring-blue-400 outline-none"
+                          value={it.conversionFactor}
+                          onChange={e => setPurchaseSession(s => {
+                            const items = [...s.items];
+                            items[idx] = {...items[idx], conversionFactor: e.target.value};
                             return {...s, items};
                           })}/>
                       </div>
@@ -3234,8 +3293,11 @@ export default function App() {
                           })}/>
                       </div>
                     </div>
-                    {ppu && (
-                      <p className="text-[10px] text-emerald-600 font-bold px-1">≈ {ppu} ฿/{selItem?.unit} · ต้นทุนเฉลี่ยจะถูกอัพเดต</p>
+                    {(isConverted || ppu) && (
+                      <p className="text-[10px] font-bold px-1 text-slate-500">
+                        {isConverted && Number(it.qty) > 0 && <span className="text-blue-600">รวม {totalBaseUnits} {selItem?.unit} </span>}
+                        {ppu && <span className="text-emerald-600">· ≈ {ppu} ฿/{selItem?.unit} · ต้นทุนเฉลี่ยจะถูกอัพเดต</span>}
+                      </p>
                     )}
                     <input type="text" placeholder="หมายเหตุ (ไม่บังคับ)" className="w-full p-2 bg-white border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-slate-300 outline-none text-slate-500"
                       value={it.note}
@@ -3248,7 +3310,7 @@ export default function App() {
                 );
               })}
             </div>
-            <button onClick={() => setPurchaseSession(s => ({...s, items: [...s.items, {consumableId:'', qty:'', totalCost:'', note:''}]}))}
+            <button onClick={() => setPurchaseSession(s => ({...s, items: [...s.items, {consumableId:'', qty:'', conversionFactor:'1', totalCost:'', note:''}]}))}
               className="mt-2 w-full py-2.5 border-2 border-dashed border-slate-200 text-slate-400 rounded-2xl font-bold text-sm hover:border-emerald-300 hover:text-emerald-600 transition-all flex items-center justify-center gap-2">
               <Plus size={16}/> เพิ่มรายการ
             </button>
@@ -3260,9 +3322,11 @@ export default function App() {
               <p className="font-bold text-emerald-700 text-xs uppercase tracking-wide mb-2">สรุปยอด</p>
               {purchaseSession.items.filter(it => it.consumableId && Number(it.qty) > 0 && Number(it.totalCost) > 0).map((it, idx) => {
                 const item = consumables.find(c => c.id === it.consumableId);
+                const cf = Math.max(1, Number(it.conversionFactor) || 1);
+                const totalUnits = Number(it.qty) * cf;
                 return (
                   <div key={idx} className="flex justify-between text-emerald-800">
-                    <span>{item?.name} × {it.qty} {item?.unit}</span>
+                    <span>{item?.name} × {totalUnits} {item?.unit}</span>
                     <span className="font-bold">{Number(it.totalCost).toLocaleString()} ฿</span>
                   </div>
                 );
@@ -3333,7 +3397,7 @@ export default function App() {
                   <div key={item.id} className="flex items-center justify-between bg-slate-50 rounded-xl px-4 py-3 border border-slate-100">
                     <div className="flex-1 min-w-0">
                       <p className="font-bold text-slate-800 text-sm truncate">{item.name}</p>
-                      <p className="text-xs text-slate-400">คงเหลือ {(item.mainStock ?? item.stockQty ?? 0)} {item.unit} · {(item.avgCostPerUnit ?? item.costPerUnit ?? 0).toLocaleString(undefined,{maximumFractionDigits:2})} ฿/{item.unit}</p>
+                      <p className="text-xs text-slate-400">คงเหลือ {(item.mainStock ?? item.stockQty ?? 0)} {item.unit}{role !== 'staff' && ` · ${(item.avgCostPerUnit ?? item.costPerUnit ?? 0).toLocaleString(undefined,{maximumFractionDigits:2})} ฿/${item.unit}`}</p>
                     </div>
                     <div className="flex items-center gap-2 ml-3 flex-shrink-0">
                       <button onClick={() => setConsumableUsageMap(m => ({...m, [item.id]: Math.max(0, (Number(m[item.id])||0) - 1)}))} className="w-7 h-7 rounded-full bg-white border border-slate-200 flex items-center justify-center text-slate-500 hover:bg-slate-100 font-bold text-lg leading-none shadow-sm">−</button>
@@ -3350,7 +3414,7 @@ export default function App() {
                   </div>
                 ))}
               </div>
-              {Object.values(consumableUsageMap).some(v => Number(v) > 0) && (
+              {role !== 'staff' && Object.values(consumableUsageMap).some(v => Number(v) > 0) && (
                 <div className="bg-orange-50 border border-orange-200 rounded-xl p-3 text-xs">
                   <p className="font-bold text-orange-700 mb-1">สรุปต้นทุน</p>
                   {Object.entries(consumableUsageMap).filter(([,v]) => Number(v)>0).map(([cId, qty]) => {
