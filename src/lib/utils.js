@@ -29,6 +29,41 @@ export const TEMP_DURATIONS = [2, 3, 4, 6, 8];
 export const getNowTimeStr = () => new Date().toTimeString().slice(0, 5);
 export const formatDate = (date) => date.toISOString().split('T')[0];
 
+// --- Thai / Buddhist Era date helpers ---
+export const THAI_MONTHS_SHORT = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
+export const THAI_DAYS_SHORT   = ['อา.','จ.','อ.','พ.','พฤ.','ศ.','ส.'];
+
+/**
+ * formatThaiDate(dateStr, format)
+ * Converts a Gregorian ISO date string (YYYY-MM-DD) to Buddhist Era display.
+ * format: 'full'      → "17 พ.ค. 2568"
+ *         'short'     → "17/05/2568"
+ *         'yearOnly'  → "2568"
+ *         'monthYear' → "พ.ค. 2568"
+ *         'dayAbbr'   → "จ." (weekday abbreviation)
+ *         'monthAbbr' → "พ.ค."
+ *         'dayNum'    → "17"
+ */
+export const formatThaiDate = (dateStr, format = 'full') => {
+  if (!dateStr) return '';
+  const d = new Date(dateStr + 'T00:00:00');
+  if (isNaN(d.getTime())) return dateStr;
+  const buddhistYear = d.getFullYear() + 543;
+  const month = d.getMonth();
+  const day = d.getDate();
+  const dow = d.getDay();
+  switch (format) {
+    case 'full':      return `${day} ${THAI_MONTHS_SHORT[month]} ${buddhistYear}`;
+    case 'short':     return `${day}/${String(month + 1).padStart(2,'0')}/${buddhistYear}`;
+    case 'yearOnly':  return String(buddhistYear);
+    case 'monthYear': return `${THAI_MONTHS_SHORT[month]} ${buddhistYear}`;
+    case 'dayAbbr':   return THAI_DAYS_SHORT[dow];
+    case 'monthAbbr': return THAI_MONTHS_SHORT[month];
+    case 'dayNum':    return String(day);
+    default:          return `${day} ${THAI_MONTHS_SHORT[month]} ${buddhistYear}`;
+  }
+};
+
 export const addDays = (dateStr, days) => {
   const date = new Date(dateStr);
   date.setDate(date.getDate() + parseInt(days));
@@ -127,4 +162,4 @@ export const exportToCSV = (data, filename) => {
 
 // --- Message templates ---
 export const generateBookingSummary = (customerName, roomNames, checkInDate, nights, deposit, docNo) =>
-  `ยืนยันการจองห้องพัก "จันผารีสอร์ท" 🌿\n\n👤 คุณ: ${customerName}\n🏠 ห้อง: ${roomNames}\n📅 เข้าพัก: ${checkInDate} (${nights} คืน)\n💰 ยอดมัดจำ: ${Number(deposit).toLocaleString()} บาท\n🔖 เลขที่จอง: ${docNo}\n\n📌 เงื่อนไขการจอง:\nหากต้องการยกเลิกการจอง ต้องแจ้งล่วงหน้าอย่างน้อย 5 วัน เพื่อรับเงินคืนเต็มจำนวน (100%) หากแจ้งช้ากว่ากำหนด ขอสงวนสิทธิ์ในการคืนเงินมัดจำครับ`;
+  `ยืนยันการจองห้องพัก "จันผารีสอร์ท" 🌿\n\n👤 คุณ: ${customerName}\n🏠 ห้อง: ${roomNames}\n📅 เข้าพัก: ${formatThaiDate(checkInDate, 'full')} (${nights} คืน)\n💰 ยอดมัดจำ: ${Number(deposit).toLocaleString()} บาท\n🔖 เลขที่จอง: ${docNo}\n\n📌 เงื่อนไขการจอง:\nหากต้องการยกเลิกการจอง ต้องแจ้งล่วงหน้าอย่างน้อย 5 วัน เพื่อรับเงินคืนเต็มจำนวน (100%) หากแจ้งช้ากว่ากำหนด ขอสงวนสิทธิ์ในการคืนเงินมัดจำครับ`;
