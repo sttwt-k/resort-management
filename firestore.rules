@@ -33,7 +33,7 @@ service cloud.firestore {
 
     // Helper: อนุญาตเฉพาะ collection ที่รู้จัก
     function isValidCollection(col) {
-      return col in ['rooms', 'bookings', 'expenses', 'consumables', 'consumableLogs'];
+      return col in ['rooms', 'bookings', 'expenses', 'consumables', 'consumableLogs', 'consumableCategories'];
     }
   }
 }

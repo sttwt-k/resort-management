@@ -11,6 +11,7 @@ import {
   DEFAULT_ROOM_SEEDS, DEFAULT_EXPENSE_CATEGORIES, PAYMENT_METHODS, COLORS, TEMP_DURATIONS,
   getNowTimeStr, formatDate, addDays, calculateNights, calculateAge,
   generateSequentialDocNo, uploadBillPhoto, exportToCSV, generateBookingSummary,
+  formatThaiDate, THAI_MONTHS_SHORT, THAI_DAYS_SHORT,
 } from './lib/utils';
 import { 
   Calendar, Users, Phone, Camera, CheckCircle, 
@@ -173,13 +174,24 @@ export default function App() {
   // ── Consumables / Stock ──
   const [consumables, setConsumables] = useState([]);
   const [consumableLogs, setConsumableLogs] = useState([]);
+  const [consumableCategories, setConsumableCategories] = useState([]);
   const [isConsumableItemModalOpen, setIsConsumableItemModalOpen] = useState(false);
-  const [consumableItemForm, setConsumableItemForm] = useState({id:'', name:'', unit:'ชิ้น', costPerUnit:0, packUnit:'', unitsPerPack:0, minStock:5});
+  const [consumableItemForm, setConsumableItemForm] = useState({id:'', name:'', unit:'ชิ้น', packUnit:'', unitsPerPack:0, minStock:5, category:''});
   const [consumableItemFormMode, setConsumableItemFormMode] = useState('create');
   const [isRestockModalOpen, setIsRestockModalOpen] = useState(false);
   const [restockTarget, setRestockTarget] = useState(null);
   const [restockQty, setRestockQty] = useState('');
   const [restockIsPackUnit, setRestockIsPackUnit] = useState(false);
+  const [restockTotalCost, setRestockTotalCost] = useState('');
+  const [isPurchaseModalOpen, setIsPurchaseModalOpen] = useState(false);
+  const [purchaseTarget, setPurchaseTarget] = useState(null);
+  const [purchaseForm, setPurchaseForm] = useState({qty:'', totalCost:'', date:'', isPackUnit:false, note:''});
+  const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
+  const [transferTarget, setTransferTarget] = useState(null);
+  const [transferForm, setTransferForm] = useState({qty:'', direction:'toRoom'});
+  const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
+  const [categoryForm, setCategoryForm] = useState({id:'', name:'', treatRemovalAsUsed:false});
+  const [stockCategoryFilter, setStockCategoryFilter] = useState('');
   const [isUseConsumableModalOpen, setIsUseConsumableModalOpen] = useState(false);
   const [usageTargetRoomId, setUsageTargetRoomId] = useState(null);
   const [consumableUsageMap, setConsumableUsageMap] = useState({});
@@ -324,8 +336,23 @@ export default function App() {
     const unsubConsumables = onSnapshot(qConsumables, snap => setConsumables(snap.docs.map(d => ({id: d.id, ...d.data()}))));
     const qConsumableLogs = query(collection(db, 'artifacts', appId, 'public', 'data', 'consumableLogs'));
     const unsubConsumableLogs = onSnapshot(qConsumableLogs, snap => setConsumableLogs(snap.docs.map(d => ({id: d.id, ...d.data()}))));
+    const qCategories = query(collection(db, 'artifacts', appId, 'public', 'data', 'consumableCategories'));
+    const unsubCategories = onSnapshot(qCategories, snap => {
+      const cats = snap.docs.map(d => ({id: d.id, ...d.data()}));
+      if (cats.length === 0) {
+        // seed defaults on first run
+        const defaults = [
+          {name:'ทำความสะอาด', treatRemovalAsUsed:true},
+          {name:'ของใช้เติมห้อง', treatRemovalAsUsed:false},
+          {name:'ผ้า', treatRemovalAsUsed:false},
+        ];
+        defaults.forEach(c => addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'consumableCategories'), c));
+      } else {
+        setConsumableCategories(cats);
+      }
+    });
 
-    return () => { unsubRooms(); unsubBookings(); unsubExpenses(); unsubConsumables(); unsubConsumableLogs(); };
+    return () => { unsubRooms(); unsubBookings(); unsubExpenses(); unsubConsumables(); unsubConsumableLogs(); unsubCategories(); };
   }, [user, useMockData]);
 
   const showNotification = (msg, type = 'success') => { setNotification({ message: msg, type }); setTimeout(() => setNotification(null), 3000); };
@@ -663,7 +690,7 @@ export default function App() {
         }
         else availableList.push(r.name);
     });
-    const message = `สรุปห้องพัก "จันผารีสอร์ท" \nวันที่: ${selectedDate}\n--------------------\n✅ ว่าง (${availableList.length}):\n${availableList.length > 0 ? availableList.join(', ') : '-'}\n\n🏠 เข้าพัก (${occupiedList.length}):\n${occupiedList.length > 0 ? occupiedList.join('\n') : '-'}\n\n📒 จองไว้ (${bookedList.length}):\n${bookedList.length > 0 ? bookedList.join('\n') : '-'}\n--------------------`;
+    const message = `สรุปห้องพัก "จันผารีสอร์ท" \nวันที่: ${formatThaiDate(selectedDate, 'full')}\n--------------------\n✅ ว่าง (${availableList.length}):\n${availableList.length > 0 ? availableList.join(', ') : '-'}\n\n🏠 เข้าพัก (${occupiedList.length}):\n${occupiedList.length > 0 ? occupiedList.join('\n') : '-'}\n\n📒 จองไว้ (${bookedList.length}):\n${bookedList.length > 0 ? bookedList.join('\n') : '-'}\n--------------------`;
     setLineMessage(message);
     setIsLineModalOpen(true);
   };
@@ -970,6 +997,26 @@ export default function App() {
      });
   };
 
+  const handleCheckInSingle = (bid, roomName) => {
+     showConfirm({
+         title: 'ยืนยันเช็คอิน',
+         message: `เช็คอิน ${roomName}?`,
+         confirmLabel: 'เช็คอิน',
+         variant: 'default',
+         onConfirm: async () => {
+             if (useMockData) { showNotification('โหมดตัวอย่าง: เช็คอินสำเร็จ'); return; }
+             try {
+                 await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', bid), {
+                     status: 'occupied',
+                     checkInTime: Timestamp.now(),
+                     checkInTimeStr: getNowTimeStr(),
+                 });
+                 showNotification(`เช็คอิน ${roomName} เรียบร้อยแล้ว ✅`);
+             } catch (error) { showNotification("เกิดข้อผิดพลาด", "error"); }
+         }
+     });
+  };
+
   const handleDeleteBooking = () => {
       showConfirm({
           title: 'ยกเลิกการจอง',
@@ -1073,10 +1120,10 @@ export default function App() {
   // ── Consumable Handlers ──────────────────────────────────────────────────────
   const openConsumableItemModal = (item = null) => {
     if (item) {
-      setConsumableItemForm({id: item.id, name: item.name, unit: item.unit, costPerUnit: item.costPerUnit, packUnit: item.packUnit||'', unitsPerPack: item.unitsPerPack||0, minStock: item.minStock||5});
+      setConsumableItemForm({id: item.id, name: item.name, unit: item.unit, packUnit: item.packUnit||'', unitsPerPack: item.unitsPerPack||0, minStock: item.minStock||5, category: item.category||''});
       setConsumableItemFormMode('edit');
     } else {
-      setConsumableItemForm({id:'', name:'', unit:'ชิ้น', costPerUnit:0, packUnit:'', unitsPerPack:0, minStock:5});
+      setConsumableItemForm({id:'', name:'', unit:'ชิ้น', packUnit:'', unitsPerPack:0, minStock:5, category: consumableCategories[0]?.name||''});
       setConsumableItemFormMode('create');
     }
     setIsConsumableItemModalOpen(true);
@@ -1086,14 +1133,14 @@ export default function App() {
     e.preventDefault();
     const payload = {
       name: consumableItemForm.name, unit: consumableItemForm.unit,
-      costPerUnit: Number(consumableItemForm.costPerUnit),
       packUnit: consumableItemForm.packUnit,
       unitsPerPack: Number(consumableItemForm.unitsPerPack)||0,
       minStock: Number(consumableItemForm.minStock)||0,
+      category: consumableItemForm.category||'',
     };
     try {
       if (consumableItemFormMode === 'create') {
-        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'consumables'), {...payload, stockQty: 0, createdAt: Timestamp.now()});
+        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'consumables'), {...payload, stockQty: 0, mainStock: 0, roomStock: 0, avgCostPerUnit: 0, createdAt: Timestamp.now()});
         showNotification('เพิ่มรายการแล้ว');
       } else {
         await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'consumables', consumableItemForm.id), payload);
@@ -1119,9 +1166,10 @@ export default function App() {
   const handleRestock = async () => {
     if (!restockTarget || !restockQty) return;
     const unitsToAdd = restockIsPackUnit ? Number(restockQty) * (restockTarget.unitsPerPack||1) : Number(restockQty);
-    const costForLog = unitsToAdd * (restockTarget.costPerUnit||0);
+    const costForLog = unitsToAdd * (restockTarget.avgCostPerUnit||restockTarget.costPerUnit||0);
+    const currentMain = restockTarget.mainStock ?? restockTarget.stockQty ?? 0;
     try {
-      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'consumables', restockTarget.id), { stockQty: (restockTarget.stockQty||0) + unitsToAdd });
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'consumables', restockTarget.id), { mainStock: currentMain + unitsToAdd, stockQty: currentMain + unitsToAdd });
       await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'consumableLogs'), {
         consumableId: restockTarget.id, consumableName: restockTarget.name,
         qty: unitsToAdd, unit: restockTarget.unit, logType: 'restock',
@@ -1131,6 +1179,119 @@ export default function App() {
       });
       showNotification(`เติมสต๊อก ${unitsToAdd} ${restockTarget.unit}`); setIsRestockModalOpen(false);
     } catch(e) { showNotification('เกิดข้อผิดพลาด', 'error'); }
+  };
+
+  // ── Purchase (ซื้อของ) ── weighted avg cost + auto-expense
+  const openPurchaseModal = (item) => {
+    setPurchaseTarget(item);
+    setPurchaseForm({qty:'', totalCost:'', date: selectedDate, isPackUnit:false, note:''});
+    setIsPurchaseModalOpen(true);
+  };
+
+  const handlePurchase = async () => {
+    if (!purchaseTarget || !purchaseForm.qty || !purchaseForm.totalCost) return;
+    const rawQty = Number(purchaseForm.qty);
+    const unitsToAdd = purchaseForm.isPackUnit ? rawQty * (purchaseTarget.unitsPerPack||1) : rawQty;
+    const totalCost = Number(purchaseForm.totalCost);
+    const pricePerUnit = unitsToAdd > 0 ? totalCost / unitsToAdd : 0;
+    const currentMain = purchaseTarget.mainStock ?? purchaseTarget.stockQty ?? 0;
+    const currentAvg = purchaseTarget.avgCostPerUnit ?? purchaseTarget.costPerUnit ?? 0;
+    const newAvg = (currentMain + unitsToAdd) > 0
+      ? (currentMain * currentAvg + unitsToAdd * pricePerUnit) / (currentMain + unitsToAdd)
+      : pricePerUnit;
+    const currentRoom = purchaseTarget.roomStock ?? 0;
+    try {
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'consumables', purchaseTarget.id), {
+        mainStock: currentMain + unitsToAdd,
+        stockQty: currentMain + unitsToAdd + currentRoom,
+        avgCostPerUnit: Math.round(newAvg * 100) / 100,
+      });
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'consumableLogs'), {
+        consumableId: purchaseTarget.id, consumableName: purchaseTarget.name,
+        qty: unitsToAdd, unit: purchaseTarget.unit, logType: 'purchase',
+        date: purchaseForm.date || selectedDate, cost: totalCost, pricePerUnit,
+        note: purchaseForm.note || (purchaseForm.isPackUnit ? `ซื้อ ${rawQty} ${purchaseTarget.packUnit||'แพ็ค'}` : ''),
+        createdAt: Timestamp.now(),
+      });
+      // Auto-record to expenses
+      const expDocNo = generateSequentialDocNo('EX', purchaseForm.date || selectedDate, expenses);
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'expenses'), {
+        docNo: expDocNo, amount: totalCost,
+        category: 'ของใช้สิ้นเปลือง (สบู่/ทิชชู่)',
+        note: `ซื้อ ${purchaseTarget.name}${purchaseForm.note ? ': '+purchaseForm.note : ''}`,
+        date: purchaseForm.date || selectedDate,
+        paymentMethod: 'เงินสด',
+        createdAt: Timestamp.now(), updatedAt: Timestamp.now(), updatedBy: user?.uid || '',
+      });
+      showNotification(`บันทึกการซื้อ + รายจ่ายอัตโนมัติแล้ว ✅`);
+      setIsPurchaseModalOpen(false);
+    } catch(e) { console.error(e); showNotification('เกิดข้อผิดพลาด', 'error'); }
+  };
+
+  // ── Transfer between main ↔ room storage ──
+  const openTransferModal = (item) => {
+    setTransferTarget(item);
+    setTransferForm({qty:'', direction:'toRoom'});
+    setIsTransferModalOpen(true);
+  };
+
+  const handleTransfer = async () => {
+    if (!transferTarget || !transferForm.qty) return;
+    const qty = Number(transferForm.qty);
+    const currentMain = transferTarget.mainStock ?? transferTarget.stockQty ?? 0;
+    const currentRoom = transferTarget.roomStock ?? 0;
+    let newMain = currentMain, newRoom = currentRoom;
+    if (transferForm.direction === 'toRoom') {
+      if (qty > currentMain) { showNotification('คลังหลักไม่พอ', 'error'); return; }
+      newMain = currentMain - qty; newRoom = currentRoom + qty;
+    } else {
+      if (qty > currentRoom) { showNotification('คลังห้องพักไม่พอ', 'error'); return; }
+      newMain = currentMain + qty; newRoom = currentRoom - qty;
+    }
+    try {
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'consumables', transferTarget.id), {
+        mainStock: newMain, roomStock: newRoom, stockQty: newMain + newRoom,
+      });
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'consumableLogs'), {
+        consumableId: transferTarget.id, consumableName: transferTarget.name,
+        qty, unit: transferTarget.unit, logType: 'transfer',
+        direction: transferForm.direction,
+        date: selectedDate, cost: 0, note: transferForm.direction === 'toRoom' ? 'โอนไปคลังห้องพัก' : 'คืนคลังหลัก',
+        createdAt: Timestamp.now(),
+      });
+      showNotification(`โอน ${qty} ${transferTarget.unit} เรียบร้อยแล้ว ✅`);
+      setIsTransferModalOpen(false);
+    } catch(e) { showNotification('เกิดข้อผิดพลาด', 'error'); }
+  };
+
+  // ── Category management ──
+  const openCategoryModal = (cat = null) => {
+    if (cat) setCategoryForm({id: cat.id, name: cat.name, treatRemovalAsUsed: cat.treatRemovalAsUsed||false});
+    else setCategoryForm({id:'', name:'', treatRemovalAsUsed:false});
+    setIsCategoryModalOpen(true);
+  };
+
+  const handleSaveCategory = async () => {
+    if (!categoryForm.name.trim()) return;
+    const payload = {name: categoryForm.name.trim(), treatRemovalAsUsed: categoryForm.treatRemovalAsUsed};
+    try {
+      if (categoryForm.id) {
+        await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'consumableCategories', categoryForm.id), payload);
+      } else {
+        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'consumableCategories'), payload);
+      }
+      showNotification('บันทึกหมวดหมู่แล้ว'); setIsCategoryModalOpen(false);
+    } catch(e) { showNotification('เกิดข้อผิดพลาด', 'error'); }
+  };
+
+  const handleDeleteCategory = async () => {
+    if (!categoryForm.id) return;
+    showConfirm({ title:'ลบหมวดหมู่', message:`ลบ "${categoryForm.name}"?`, variant:'danger', confirmLabel:'ลบ',
+      onConfirm: async () => {
+        try { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'consumableCategories', categoryForm.id)); setIsCategoryModalOpen(false); }
+        catch(e) { showNotification('ลบไม่สำเร็จ','error'); }
+      }
+    });
   };
 
   const openUseConsumableModal = (roomId) => { setUsageTargetRoomId(roomId); setConsumableUsageMap({}); setIsUseConsumableModalOpen(true); };
@@ -1145,11 +1306,14 @@ export default function App() {
         if (!item) return [];
         const numQty = Number(qty);
         return [
-          updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'consumables', cId), { stockQty: Math.max(0, (item.stockQty||0) - numQty) }),
+          updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'consumables', cId), {
+            mainStock: Math.max(0, (item.mainStock ?? item.stockQty ?? 0) - numQty),
+            stockQty: Math.max(0, (item.stockQty||0) - numQty),
+          }),
           addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'consumableLogs'), {
             consumableId: cId, consumableName: item.name, qty: numQty, unit: item.unit,
             logType: 'use', roomId: usageTargetRoomId, roomName: room?.name||'',
-            date: selectedDate, cost: numQty * (item.costPerUnit||0), note: '', createdAt: Timestamp.now(),
+            date: selectedDate, cost: numQty * (item.avgCostPerUnit||item.costPerUnit||0), note: '', createdAt: Timestamp.now(),
           }),
         ];
       }));
@@ -1412,8 +1576,8 @@ export default function App() {
                     <button onClick={() => setCurrentView('timeline')} className={`px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-all ${currentView === 'timeline' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}><LayoutList size={18} /> <span className="hidden md:inline">ไทม์ไลน์</span></button>
                     <button onClick={() => setCurrentView('customers')} className={`px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-all ${currentView === 'customers' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}><Users size={18} /> <span className="hidden md:inline">ลูกค้า</span></button>
                     <button onClick={() => setCurrentView('expenses')} className={`px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-all ${currentView === 'expenses' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}><Wallet size={18} /> <span className="hidden md:inline">รายจ่าย</span></button>
-                    <button onClick={() => setCurrentView('report')} className={`px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-all ${currentView === 'report' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}><BarChart2 size={18} /> <span className="hidden md:inline">รายงาน</span></button>
                     <button onClick={() => setCurrentView('stock')} className={`px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-all ${currentView === 'stock' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}><Package size={18} /> <span className="hidden md:inline">สต๊อก</span></button>
+                    <button onClick={() => setCurrentView('report')} className={`px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-all ${currentView === 'report' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}><BarChart2 size={18} /> <span className="hidden md:inline">รายงาน</span></button>
                   </div>
               )}
               {role === 'staff' && (
@@ -1462,8 +1626,8 @@ export default function App() {
                         <button onClick={() => {setCurrentView('timeline'); setIsMobileMenuOpen(false);}} className={`p-4 rounded-xl text-lg font-bold flex items-center gap-3 ${currentView === 'timeline' ? 'bg-emerald-50 text-emerald-600' : 'text-slate-500'}`}><LayoutList size={24} /> ไทม์ไลน์</button>
                         <button onClick={() => {setCurrentView('customers'); setIsMobileMenuOpen(false);}} className={`p-4 rounded-xl text-lg font-bold flex items-center gap-3 ${currentView === 'customers' ? 'bg-emerald-50 text-emerald-600' : 'text-slate-500'}`}><Users size={24} /> ข้อมูลลูกค้า</button>
                         <button onClick={() => {setCurrentView('expenses'); setIsMobileMenuOpen(false);}} className={`p-4 rounded-xl text-lg font-bold flex items-center gap-3 ${currentView === 'expenses' ? 'bg-emerald-50 text-emerald-600' : 'text-slate-500'}`}><Wallet size={24} /> รายจ่าย</button>
-                        <button onClick={() => {setCurrentView('report'); setIsMobileMenuOpen(false);}} className={`p-4 rounded-xl text-lg font-bold flex items-center gap-3 ${currentView === 'report' ? 'bg-emerald-50 text-emerald-600' : 'text-slate-500'}`}><BarChart2 size={24} /> รายงาน</button>
                         <button onClick={() => {setCurrentView('stock'); setIsMobileMenuOpen(false);}} className={`p-4 rounded-xl text-lg font-bold flex items-center gap-3 ${currentView === 'stock' ? 'bg-emerald-50 text-emerald-600' : 'text-slate-500'}`}><Package size={24} /> สต๊อกของใช้</button>
+                        <button onClick={() => {setCurrentView('report'); setIsMobileMenuOpen(false);}} className={`p-4 rounded-xl text-lg font-bold flex items-center gap-3 ${currentView === 'report' ? 'bg-emerald-50 text-emerald-600' : 'text-slate-500'}`}><BarChart2 size={24} /> รายงาน</button>
                         <hr className="my-2 border-slate-100"/>
                         <button onClick={() => {setIsRoomSettingsOpen(true); setIsMobileMenuOpen(false);}} className="p-4 rounded-xl text-lg font-bold flex items-center gap-3 text-slate-500"><Settings size={24}/> ตั้งค่า</button>
                     </>
@@ -1496,10 +1660,13 @@ export default function App() {
             </div>
 
             <div className="bg-white/80 backdrop-blur rounded-2xl p-2 flex justify-between items-center gap-2 shadow-sm border border-white">
-               <div className="flex items-center gap-2 bg-white px-3 py-2 rounded-xl shadow-inner border border-slate-100 flex-1 justify-center">
-                  <button onClick={() => {const d = new Date(selectedDate); d.setDate(d.getDate() - 1); setSelectedDate(formatDate(d));}} className="p-1.5 hover:bg-slate-100 rounded-full text-slate-400 hover:text-emerald-600 transition-colors">◀</button>
-                  <input type="date" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} className="bg-transparent font-black text-lg md:text-xl text-slate-800 outline-none text-center px-1 cursor-pointer font-mono" />
-                  <button onClick={() => {const d = new Date(selectedDate); d.setDate(d.getDate() + 1); setSelectedDate(formatDate(d));}} className="p-1.5 hover:bg-slate-100 rounded-full text-slate-400 hover:text-emerald-600 transition-colors">▶</button>
+               <div className="flex flex-col items-center bg-white px-3 py-1.5 rounded-xl shadow-inner border border-slate-100 flex-1 justify-center">
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => {const d = new Date(selectedDate); d.setDate(d.getDate() - 1); setSelectedDate(formatDate(d));}} className="p-1.5 hover:bg-slate-100 rounded-full text-slate-400 hover:text-emerald-600 transition-colors">◀</button>
+                    <input type="date" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} className="bg-transparent font-black text-base text-slate-800 outline-none text-center px-1 cursor-pointer font-mono" />
+                    <button onClick={() => {const d = new Date(selectedDate); d.setDate(d.getDate() + 1); setSelectedDate(formatDate(d));}} className="p-1.5 hover:bg-slate-100 rounded-full text-slate-400 hover:text-emerald-600 transition-colors">▶</button>
+                  </div>
+                  <span className="text-xs font-bold text-emerald-600">{formatThaiDate(selectedDate, 'full')}</span>
                </div>
                {role === 'owner' && <button onClick={openLineReport} className="bg-[#06C755] text-white px-4 py-2.5 rounded-xl shadow-lg shadow-green-100 text-sm font-bold flex items-center justify-center gap-1 hover:bg-[#05b54d] transition-transform transform active:scale-95"><MessageSquare size={18}/><span className="hidden md:inline"> สรุป LINE</span></button>}
             </div>
@@ -1604,43 +1771,66 @@ export default function App() {
                         <button onClick={() => {const d = new Date(timelineStartDate); d.setDate(d.getDate() + 7); setTimelineStartDate(formatDate(d));}} className="p-2 hover:bg-slate-100 rounded-lg"><ChevronRight size={24}/></button>
                     </div>
                 </div>
-                <div className="bg-white rounded-[1.5rem] shadow-sm border border-slate-200 overflow-x-auto custom-scrollbar p-6">
+                <div className="flex flex-wrap gap-3 bg-white px-5 py-3 rounded-2xl shadow-sm border border-slate-200 text-xs font-bold">
+                    <span className="flex items-center gap-1.5"><span className="w-4 h-4 rounded bg-yellow-200 border border-yellow-300 inline-block"/><span className="text-slate-600">จอง (Booked)</span></span>
+                    <span className="flex items-center gap-1.5"><span className="w-4 h-4 rounded bg-blue-200 border border-blue-300 inline-block"/><span className="text-slate-600">กำลังพัก (Occupied)</span></span>
+                    <span className="flex items-center gap-1.5"><span className="w-4 h-4 rounded bg-slate-200 border border-slate-300 opacity-60 inline-block"/><span className="text-slate-600">คืนห้องแล้ว (Checked-out)</span></span>
+                </div>
+                <div className="bg-white rounded-[1.5rem] shadow-sm border border-slate-200 overflow-x-auto custom-scrollbar p-4">
                     <div className="min-w-[1000px]">
-                        <div className="timeline-grid mb-4 border-b border-slate-100 pb-2">
-                            <div className="font-bold text-slate-400">ห้อง / วันที่</div>
+                        {/* Header row */}
+                        <div className="timeline-grid mb-1">
+                            <div className="font-bold text-slate-400 text-xs px-2 flex items-end pb-1">ห้อง</div>
                             {[...Array(14)].map((_, i) => {
                                 const date = addDays(timelineStartDate, i);
-                                const dayNum = date.split('-')[2];
-                                const isWeekend = new Date(date).getDay() === 0 || new Date(date).getDay() === 6;
+                                const d = new Date(date + 'T00:00:00');
+                                const isWeekend = d.getDay() === 0 || d.getDay() === 6;
+                                const isToday = date === formatDate(new Date());
                                 return (
-                                    <div key={i} className={`text-center font-bold text-sm ${isWeekend ? 'text-red-500' : 'text-slate-600'}`}>
-                                        {dayNum}
+                                    <div key={i} className={`text-center border-l border-slate-100 py-1 ${isToday ? 'bg-emerald-50 rounded-t-lg' : ''}`}>
+                                        <div className={`text-[9px] font-bold ${isWeekend ? 'text-red-400' : 'text-slate-400'}`}>{THAI_DAYS_SHORT[d.getDay()]}</div>
+                                        <div className={`text-sm font-black ${isToday ? 'text-emerald-600' : isWeekend ? 'text-red-500' : 'text-slate-700'}`}>{d.getDate()}</div>
+                                        <div className={`text-[9px] font-bold ${isWeekend ? 'text-red-400' : 'text-slate-400'}`}>{THAI_MONTHS_SHORT[d.getMonth()]}</div>
                                     </div>
                                 );
                             })}
                         </div>
-                        <div className="space-y-2">
+                        {/* Divider */}
+                        <div className="border-t-2 border-slate-200 mb-1"/>
+                        {/* Room rows */}
+                        <div className="space-y-1">
                             {rooms.map(room => (
-                                <div key={room.id} className="timeline-grid items-center h-12 hover:bg-slate-50 rounded-lg transition-colors">
-                                    <div className="font-bold text-slate-700 text-sm px-2">{room.name}</div>
+                                <div key={room.id} className="timeline-grid items-center h-11 hover:bg-slate-50 rounded-lg transition-colors group">
+                                    <div className="font-bold text-slate-700 text-xs px-2 truncate">{room.name}</div>
                                     {[...Array(14)].map((_, i) => {
                                         const currentDate = addDays(timelineStartDate, i);
                                         const { status, booking } = checkRoomStatus(room.id, currentDate, true);
-                                        const isStart = booking && booking.checkInDate === currentDate;
-                                        let bgClass = "bg-transparent";
-                                        if (status === 'booked') bgClass = "bg-yellow-200 border-y border-yellow-300";
-                                        if (status === 'occupied') bgClass = "bg-blue-200 border-y border-blue-300";
-                                        if (status === 'checked-out') bgClass = "bg-slate-200 border-y border-slate-300 opacity-60"; 
-                                        let radiusClass = "";
-                                        if (isStart) radiusClass = "rounded-l-md border-l";
-                                        if (booking && booking.checkOutDate === addDays(currentDate, 1)) radiusClass += " rounded-r-md border-r";
+                                        const isToday = currentDate === formatDate(new Date());
+                                        if (status === 'available') {
+                                            return <div key={i} className={`h-full border-l border-slate-100 ${isToday ? 'bg-emerald-50/50' : ''}`}/>;
+                                        }
+                                        const isCheckIn = booking.checkInDate === currentDate;
+                                        const isLastNight = addDays(currentDate, 1) === booking.checkOutDate;
+                                        let bgClass = "bg-yellow-300 border-yellow-400";
+                                        if (status === 'occupied') bgClass = "bg-blue-300 border-blue-400";
+                                        if (status === 'checked-out') bgClass = "bg-slate-200 border-slate-300 opacity-50";
+                                        // Bar positioning: start at midpoint of check-in, end at midpoint of check-out
+                                        let leftPct = '0%', widthPct = '100%';
+                                        let roundL = false, roundR = false;
+                                        if (isCheckIn && isLastNight) { leftPct='25%'; widthPct='50%'; roundL=true; roundR=true; }
+                                        else if (isCheckIn) { leftPct='50%'; widthPct='50%'; roundL=true; }
+                                        else if (isLastNight) { leftPct='0%'; widthPct='50%'; roundR=true; }
+                                        const roundClass = `${roundL ? 'rounded-l-full' : ''} ${roundR ? 'rounded-r-full' : ''}`;
                                         return (
-                                            <div key={i} className="h-8 px-1 relative">
-                                                {status !== 'available' && (
-                                                    <div className={`w-full h-full ${bgClass} ${radiusClass} flex items-center overflow-hidden cursor-pointer transition-opacity hover:opacity-80`} title={`${booking.guestName} (${status})`} onClick={() => handleRoomClick(room, status, booking, 'timeline')}>
-                                                        {isStart && <span className="text-[10px] font-bold text-slate-800 whitespace-nowrap pl-2">{booking.guestName}</span>}
-                                                    </div>
-                                                )}
+                                            <div key={i} className={`relative h-full border-l border-slate-100 ${isToday ? 'bg-emerald-50/50' : ''}`}>
+                                                <div
+                                                    className={`absolute top-1/2 -translate-y-1/2 h-6 ${bgClass} border ${roundClass} flex items-center overflow-hidden cursor-pointer hover:opacity-80 transition-opacity`}
+                                                    style={{ left: leftPct, width: widthPct }}
+                                                    title={`${booking.guestName} (${status})`}
+                                                    onClick={() => handleRoomClick(room, status, booking, 'timeline')}
+                                                >
+                                                    {isCheckIn && <span className="text-[9px] font-bold text-slate-800 whitespace-nowrap px-2 truncate">{booking.guestName}</span>}
+                                                </div>
                                             </div>
                                         );
                                     })}
@@ -1782,52 +1972,65 @@ export default function App() {
                     <p className="text-sm mt-1">กด <strong>+ เพิ่มรายการ</strong> เพื่อเริ่มต้นใช้งาน</p>
                   </div>
                 )}
-                {[...consumables].sort((a,b) => (a.name||'').localeCompare(b.name||'')).map(item => {
-                  const stock = item.stockQty || 0;
-                  const isOut = stock <= 0;
-                  const isLow = !isOut && stock <= (item.minStock || 0);
-                  const stockStyle = isOut
-                    ? 'border-red-200 bg-red-50 text-red-700'
-                    : isLow
-                    ? 'border-amber-200 bg-amber-50 text-amber-700'
-                    : 'border-emerald-200 bg-emerald-50 text-emerald-700';
+                {/* Category filter tabs */}
+                {consumableCategories.length > 0 && (
+                  <div className="col-span-full flex flex-wrap gap-2 mb-2">
+                    <button onClick={() => setStockCategoryFilter('')} className={`px-4 py-1.5 rounded-full font-bold text-xs transition-all ${stockCategoryFilter === '' ? 'bg-slate-700 text-white shadow' : 'bg-white text-slate-500 border border-slate-200 hover:bg-slate-50'}`}>ทั้งหมด</button>
+                    {consumableCategories.map(cat => (
+                      <button key={cat.id} onClick={() => setStockCategoryFilter(cat.name)} className={`px-4 py-1.5 rounded-full font-bold text-xs transition-all ${stockCategoryFilter === cat.name ? 'bg-emerald-600 text-white shadow' : 'bg-white text-slate-500 border border-slate-200 hover:bg-slate-50'}`}>{cat.name}</button>
+                    ))}
+                    <button onClick={() => openCategoryModal()} className="px-4 py-1.5 rounded-full font-bold text-xs bg-white text-slate-400 border border-dashed border-slate-300 hover:bg-slate-50 flex items-center gap-1"><Plus size={12}/> หมวดหมู่</button>
+                  </div>
+                )}
+                {[...consumables]
+                  .filter(item => !stockCategoryFilter || item.category === stockCategoryFilter)
+                  .sort((a,b) => (a.name||'').localeCompare(b.name||''))
+                  .map(item => {
+                  const mainStock = item.mainStock ?? item.stockQty ?? 0;
+                  const roomStock = item.roomStock ?? 0;
+                  const totalStock = mainStock + roomStock;
+                  const avgCost = item.avgCostPerUnit ?? item.costPerUnit ?? 0;
+                  const isOut = totalStock <= 0;
+                  const isLow = !isOut && mainStock <= (item.minStock || 0);
                   return (
-                    <div key={item.id} className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 space-y-4 hover:shadow-md transition-shadow flex flex-col">
+                    <div key={item.id} className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 space-y-3 hover:shadow-md transition-shadow flex flex-col">
                       <div className="flex justify-between items-start">
                         <div className="flex-1 min-w-0">
-                          <h3 className="font-bold text-slate-800 text-lg leading-tight">{item.name}</h3>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h3 className="font-bold text-slate-800 text-base leading-tight">{item.name}</h3>
+                            {item.category && <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 font-bold">{item.category}</span>}
+                          </div>
                           <p className="text-xs text-slate-400 mt-0.5">
-                            {item.costPerUnit?.toLocaleString()} ฿/{item.unit}
+                            ต้นทุนเฉลี่ย {avgCost > 0 ? avgCost.toLocaleString(undefined,{maximumFractionDigits:2}) : '—'} ฿/{item.unit}
                             {item.packUnit && item.unitsPerPack > 0 && ` · ${item.unitsPerPack} ${item.unit}/${item.packUnit}`}
                           </p>
                         </div>
-                        <button onClick={() => openConsumableItemModal(item)} className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-xl transition-colors ml-2 flex-shrink-0">
-                          <Edit size={16}/>
-                        </button>
+                        <button onClick={() => openConsumableItemModal(item)} className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-xl transition-colors ml-2 flex-shrink-0"><Edit size={15}/></button>
                       </div>
 
-                      <div className={`rounded-xl border px-4 py-3 ${stockStyle}`}>
-                        <div className="flex justify-between items-center">
-                          <span className="text-sm font-bold opacity-75">คงเหลือ</span>
-                          <span className="text-3xl font-black">{stock} <span className="text-sm font-bold">{item.unit}</span></span>
+                      {/* Stock bars */}
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className={`rounded-xl border px-3 py-2 ${isOut ? 'border-red-200 bg-red-50' : isLow ? 'border-amber-200 bg-amber-50' : 'border-slate-200 bg-slate-50'}`}>
+                          <p className="text-[10px] font-bold text-slate-400 uppercase mb-0.5">คลังหลัก</p>
+                          <p className={`text-xl font-black ${isOut ? 'text-red-600' : isLow ? 'text-amber-600' : 'text-slate-700'}`}>{mainStock} <span className="text-xs font-bold">{item.unit}</span></p>
+                          {(isOut || isLow) && <p className="text-[10px] font-bold text-current mt-0.5 flex items-center gap-1"><AlertCircle size={10}/>{isOut ? 'หมด' : 'ใกล้หมด'}</p>}
                         </div>
-                        {item.packUnit && item.unitsPerPack > 0 && (
-                          <p className="text-xs text-right opacity-60 mt-0.5">≈ {(stock / item.unitsPerPack).toFixed(1)} {item.packUnit}</p>
-                        )}
-                        {(isOut || isLow) && (
-                          <p className="text-xs font-bold mt-1.5 flex items-center gap-1">
-                            <AlertCircle size={12}/>
-                            {isOut ? 'หมดแล้ว — ต้องเติมสต๊อก' : `ใกล้หมด (แจ้งเตือน < ${item.minStock} ${item.unit})`}
-                          </p>
-                        )}
+                        <div className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2">
+                          <p className="text-[10px] font-bold text-blue-400 uppercase mb-0.5">คลังห้องพัก</p>
+                          <p className="text-xl font-black text-blue-700">{roomStock} <span className="text-xs font-bold">{item.unit}</span></p>
+                        </div>
                       </div>
 
-                      <div className="grid grid-cols-2 gap-2 mt-auto pt-1">
-                        <button onClick={() => openRestockModal(item)} className="py-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-1.5">
-                          <Plus size={15}/> เติมสต๊อก
+                      {/* Actions */}
+                      <div className="grid grid-cols-3 gap-1.5 mt-auto pt-1">
+                        <button onClick={() => openPurchaseModal(item)} className="py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-1">
+                          <Receipt size={12}/> ซื้อของ
                         </button>
-                        <button onClick={() => { setUsageTargetRoomId(null); setConsumableUsageMap({}); setIsUseConsumableModalOpen(true); }} className="py-2.5 bg-orange-50 hover:bg-orange-100 text-orange-700 border border-orange-200 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-1.5">
-                          <Minus size={15}/> บันทึกใช้
+                        <button onClick={() => openTransferModal(item)} className="py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-1">
+                          <ArrowRight size={12}/> โอน
+                        </button>
+                        <button onClick={() => { setUsageTargetRoomId(null); setConsumableUsageMap({}); setIsUseConsumableModalOpen(true); }} className="py-2 bg-orange-50 hover:bg-orange-100 text-orange-700 border border-orange-200 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-1">
+                          <Minus size={12}/> ใช้
                         </button>
                       </div>
                     </div>
@@ -1838,54 +2041,55 @@ export default function App() {
 
             {stockSubTab === 'logs' && (
               <div className="space-y-4">
-                {/* Cost summary */}
                 {consumableLogs.length > 0 && (() => {
+                  const purchaseLogs = consumableLogs.filter(l => l.logType === 'purchase');
                   const usageLogs = consumableLogs.filter(l => l.logType === 'use');
-                  const totalCost = usageLogs.reduce((s,l) => s + (l.cost||0), 0);
-                  const thisMonthCost = usageLogs.filter(l => l.date?.startsWith(reportMonth)).reduce((s,l) => s + (l.cost||0), 0);
+                  const thisMo = reportMonth;
+                  const thisMonthPurchase = purchaseLogs.filter(l => l.date?.startsWith(thisMo)).reduce((s,l)=>s+(l.cost||0),0);
+                  const thisMonthUsage = usageLogs.filter(l => l.date?.startsWith(thisMo)).reduce((s,l)=>s+(l.cost||0),0);
                   return (
                     <div className="grid grid-cols-2 gap-4">
-                      <div className="bg-orange-50 border border-orange-200 rounded-2xl p-4 text-center">
-                        <p className="text-xs font-bold text-orange-600 uppercase tracking-wider mb-1">ต้นทุนเดือนนี้</p>
-                        <p className="text-2xl font-black text-orange-700">{thisMonthCost.toLocaleString()} ฿</p>
+                      <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 text-center">
+                        <p className="text-xs font-bold text-emerald-600 uppercase tracking-wider mb-1">ซื้อเดือนนี้</p>
+                        <p className="text-2xl font-black text-emerald-700">{thisMonthPurchase.toLocaleString()} ฿</p>
                       </div>
-                      <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-center">
-                        <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">ต้นทุนทั้งหมด</p>
-                        <p className="text-2xl font-black text-slate-700">{totalCost.toLocaleString()} ฿</p>
+                      <div className="bg-orange-50 border border-orange-200 rounded-2xl p-4 text-center">
+                        <p className="text-xs font-bold text-orange-600 uppercase tracking-wider mb-1">ต้นทุนใช้เดือนนี้</p>
+                        <p className="text-2xl font-black text-orange-700">{thisMonthUsage.toLocaleString()} ฿</p>
                       </div>
                     </div>
                   );
                 })()}
                 <div className="bg-white rounded-[1.5rem] shadow-sm border border-slate-100 overflow-x-auto">
-                  <table className="w-full text-sm text-left text-slate-600 min-w-[520px]">
+                  <table className="w-full text-sm text-left text-slate-600 min-w-[560px]">
                     <thead className="bg-slate-50 text-slate-500 uppercase text-xs font-bold tracking-wider">
                       <tr>
-                        <th className="px-5 py-4">วันที่</th>
-                        <th className="px-5 py-4">รายการ</th>
-                        <th className="px-5 py-4">ห้อง</th>
-                        <th className="px-5 py-4 text-center">จำนวน</th>
-                        <th className="px-5 py-4 text-right">ต้นทุน</th>
+                        <th className="px-4 py-4">วันที่</th>
+                        <th className="px-4 py-4">รายการ</th>
+                        <th className="px-4 py-4">ประเภท</th>
+                        <th className="px-4 py-4 text-center">จำนวน</th>
+                        <th className="px-4 py-4 text-right">มูลค่า</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-50">
-                      {[...consumableLogs].sort((a,b) => (b.createdAt?.seconds||0) - (a.createdAt?.seconds||0)).slice(0,150).map(log => (
-                        <tr key={log.id} className="hover:bg-slate-50/50 transition-colors">
-                          <td className="px-5 py-3 text-xs text-slate-500 font-mono">{log.date}</td>
-                          <td className="px-5 py-3">
-                            <span className="font-medium text-slate-800">{log.consumableName}</span>
-                            <span className={`ml-2 text-[10px] px-2 py-0.5 rounded-full font-bold ${log.logType === 'restock' ? 'bg-emerald-100 text-emerald-700' : 'bg-orange-100 text-orange-700'}`}>
-                              {log.logType === 'restock' ? 'เติม' : 'ใช้'}
-                            </span>
-                          </td>
-                          <td className="px-5 py-3 text-xs text-slate-500">{log.roomName || '-'}</td>
-                          <td className="px-5 py-3 text-center">
-                            <span className={`font-bold ${log.logType === 'restock' ? 'text-emerald-600' : 'text-orange-600'}`}>
-                              {log.logType === 'restock' ? '+' : '-'}{log.qty} {log.unit}
-                            </span>
-                          </td>
-                          <td className="px-5 py-3 text-right font-medium">{(log.cost||0).toLocaleString()} ฿</td>
-                        </tr>
-                      ))}
+                      {[...consumableLogs].sort((a,b) => (b.createdAt?.seconds||0) - (a.createdAt?.seconds||0)).slice(0,200).map(log => {
+                        const typeMap = {
+                          purchase: {label:'ซื้อ', cls:'bg-emerald-100 text-emerald-700', sign:'+'},
+                          restock:  {label:'เติม', cls:'bg-teal-100 text-teal-700', sign:'+'},
+                          use:      {label:'ใช้',  cls:'bg-orange-100 text-orange-700', sign:'-'},
+                          transfer: {label: log.direction==='toRoom'?'โอนห้อง':'คืนคลัง', cls:'bg-blue-100 text-blue-700', sign:'→'},
+                        };
+                        const t = typeMap[log.logType] || {label:log.logType, cls:'bg-slate-100 text-slate-600', sign:''};
+                        return (
+                          <tr key={log.id} className="hover:bg-slate-50/50 transition-colors">
+                            <td className="px-4 py-3 text-xs text-slate-500">{formatThaiDate(log.date,'short')}</td>
+                            <td className="px-4 py-3 font-medium text-slate-800">{log.consumableName}{log.note ? <span className="block text-[10px] text-slate-400">{log.note}</span> : null}</td>
+                            <td className="px-4 py-3"><span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${t.cls}`}>{t.label}</span></td>
+                            <td className="px-4 py-3 text-center font-bold">{t.sign}{log.qty} {log.unit}</td>
+                            <td className="px-4 py-3 text-right font-medium">{log.cost > 0 ? `${(log.cost||0).toLocaleString()} ฿` : '—'}</td>
+                          </tr>
+                        );
+                      })}
                       {consumableLogs.length === 0 && (
                         <tr><td colSpan="5" className="px-5 py-16 text-center text-slate-400">ยังไม่มีประวัติ</td></tr>
                       )}
@@ -1999,7 +2203,7 @@ export default function App() {
                           {reportDayPopup && (
                               <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 animate-fade-in">
                                   <div className="flex justify-between items-center mb-3">
-                                      <span className="text-sm font-bold text-slate-700">วันที่ {reportMonth}-{reportDayPopup.date}</span>
+                                      <span className="text-sm font-bold text-slate-700">วันที่ {formatThaiDate(`${reportMonth}-${reportDayPopup.date}`, 'full')}</span>
                                       <button onClick={() => setReportDayPopup(null)} className="p-1 rounded-full hover:bg-slate-200 text-slate-400 transition-colors"><X size={16}/></button>
                                   </div>
                                   <div className="grid grid-cols-3 gap-3 mb-3">
@@ -2176,7 +2380,7 @@ export default function App() {
 
                   {reportViewMode === 'occupancy' && (
                       <div className="space-y-3 animate-fade-in">
-                          <p className="text-xs text-slate-400 mb-4">อัตราการเข้าพักแต่ละห้อง เดือน {reportMonth} ({occupancyData[0]?.daysInMonth || 30} วัน)</p>
+                          <p className="text-xs text-slate-400 mb-4">อัตราการเข้าพักแต่ละห้อง เดือน {formatThaiDate(`${reportMonth}-01`, 'monthYear')} ({occupancyData[0]?.daysInMonth || 30} วัน)</p>
                           {occupancyData.map(room => (
                               <div key={room.roomId} className="flex items-center gap-3">
                                   <div className="w-20 text-xs font-bold text-slate-600 text-right shrink-0">{room.roomName}</div>
@@ -2283,7 +2487,7 @@ export default function App() {
                           <span className="bg-yellow-200 text-yellow-800 px-3 py-1 rounded-lg text-xs font-bold">จองแล้ว</span>
                       </div>
                       <div className="space-y-2 text-sm text-slate-700">
-                          <div className="flex justify-between"><span>เช็คอิน:</span><span className="font-medium">{selectedBookedRoom.booking.checkInDate}</span></div>
+                          <div className="flex justify-between"><span>เช็คอิน:</span><span className="font-medium">{formatThaiDate(selectedBookedRoom.booking.checkInDate, 'full')}</span></div>
                           <div className="flex justify-between"><span>จำนวนคืน:</span><span className="font-medium">{selectedBookedRoom.booking.nights} คืน</span></div>
                       </div>
                   </div>
@@ -2481,49 +2685,8 @@ export default function App() {
           ) : <p className="text-center text-slate-400 py-8">ไม่มีรายได้ในวันนี้</p>}
       </Modal>
 
-      <Modal isOpen={isRoomSettingsOpen} onClose={() => setIsRoomSettingsOpen(false)} title="ตั้งค่าระบบ / ผู้ช่วย">
+      <Modal isOpen={isRoomSettingsOpen} onClose={() => setIsRoomSettingsOpen(false)} title="ตั้งค่าระบบ">
          <div className="space-y-6">
-            <div className="bg-emerald-50/50 p-5 rounded-2xl border border-emerald-100">
-                <h3 className="font-bold text-slate-700 mb-3 flex items-center gap-2 text-sm uppercase tracking-wide"><MessageCircle className="text-emerald-500" size={16}/> ผู้ช่วยอัจฉริยะ (Auto-Message)</h3>
-                <div className="space-y-4">
-                    <div className="bg-white rounded-xl p-4 shadow-sm border border-slate-100">
-                        <h4 className="font-bold text-sm text-slate-700 mb-2 flex items-center gap-2"><LogIn size={14} className="text-blue-500"/> เตรียมเข้าพักพรุ่งนี้ ({communicationData.checkInTomorrow.length})</h4>
-                        <div className="space-y-2 max-h-40 overflow-y-auto custom-scrollbar">
-                            {communicationData.checkInTomorrow.map(b => (
-                                <div key={b.id} className="flex justify-between items-center text-xs border-b border-slate-50 pb-2 last:border-0 last:pb-0">
-                                    <div>
-                                        <p className="font-bold text-slate-800">{b.guestName}</p>
-                                        <p className="text-slate-500">{b.roomName}</p>
-                                        {b.lineId && <p className="text-xs text-[#06C755] font-bold flex items-center gap-1 mt-1"><MessageCircle size={10}/> Line: {b.lineId}</p>}
-                                    </div>
-                                    <button onClick={() => openMessagePreview(`สวัสดีครับคุณ ${b.guestName} 🙏\nทางจันผารีสอร์ทขอแจ้งเตือนการเข้าพักในวันพรุ่งนี้ครับ 🏠\n\n📍 แผนที่เดินทาง: https://maps.app.goo.gl/s8QbZDrNPNXSGt5X8\n📞 ติดต่อสอบถาม: 08x-xxx-xxxx\n\nหากต้องการความช่วยเหลือเพิ่มเติมแจ้งได้เลยนะครับ`)} className="bg-[#06C755] text-white px-3 py-1.5 rounded-lg font-bold flex items-center gap-1 hover:bg-[#05b54d]">
-                                        <Send size={10}/>
-                                    </button>
-                                </div>
-                            ))}
-                            {communicationData.checkInTomorrow.length === 0 && <p className="text-center text-slate-400 text-xs py-2">ไม่มีรายการ</p>}
-                        </div>
-                    </div>
-                    <div className="bg-white rounded-xl p-4 shadow-sm border border-slate-100">
-                        <h4 className="font-bold text-sm text-slate-700 mb-2 flex items-center gap-2"><LogOut size={14} className="text-orange-500"/> ขอบคุณลูกค้า (ออกวันนี้) ({communicationData.checkedOutToday.length})</h4>
-                        <div className="space-y-2 max-h-40 overflow-y-auto custom-scrollbar">
-                            {communicationData.checkedOutToday.map(b => (
-                                <div key={b.id} className="flex justify-between items-center text-xs border-b border-slate-50 pb-2 last:border-0 last:pb-0">
-                                    <div>
-                                        <p className="font-bold text-slate-800">{b.guestName}</p>
-                                        <p className="text-slate-500">{b.roomName}</p>
-                                        {b.lineId && <p className="text-xs text-[#06C755] font-bold flex items-center gap-1 mt-1"><MessageCircle size={10}/> Line: {b.lineId}</p>}
-                                    </div>
-                                    <button onClick={() => openMessagePreview(`ขอบพระคุณ คุณ ${b.guestName} ที่มาพักที่จันผารีสอร์ทครับ 🌿\nหวังว่าจะได้มีโอกาสต้อนรับอีกครั้งนะครับ\n\nฝากรีวิวเป็นกำลังใจให้เราด้วยนะครับ ⭐⭐⭐⭐⭐\nhttps://maps.app.goo.gl/s8QbZDrNPNXSGt5X8`)} className="bg-slate-800 text-white px-3 py-1.5 rounded-lg font-bold flex items-center gap-1 hover:bg-slate-900">
-                                        <Send size={10}/>
-                                    </button>
-                                </div>
-                            ))}
-                            {communicationData.checkedOutToday.length === 0 && <p className="text-center text-slate-400 text-xs py-2">ไม่มีรายการ</p>}
-                        </div>
-                    </div>
-                </div>
-            </div>
             <div className="bg-slate-50 p-5 rounded-2xl border border-slate-100">
                 <h4 className="font-bold text-slate-700 mb-3 text-sm">เพิ่ม/แก้ไข ห้องพัก</h4>
                 <div className="grid grid-cols-3 gap-3 mb-3">
@@ -2646,7 +2809,7 @@ export default function App() {
                                     {formData.idCard && <span className="bg-slate-100 px-2 py-1 rounded flex items-center gap-1"><CreditCard size={10}/> {formData.idCard}</span>}
                                 </div>
                             )}
-                            <div className="flex justify-between items-center px-2"><span>เข้าพัก:</span><span className="font-medium">{formData.checkInDate} ({formData.nights} คืน)</span></div>
+                            <div className="flex justify-between items-center px-2"><span>เข้าพัก:</span><span className="font-medium">{formatThaiDate(formData.checkInDate, 'full')} ({formData.nights} คืน)</span></div>
                             <div className="grid grid-cols-2 gap-2 px-2">
                                 <div className="flex flex-col gap-1">
                                     <span className="text-xs text-slate-400">เวลาเข้าพัก</span>
@@ -2679,10 +2842,14 @@ export default function App() {
                                     const isCheckedOut = b.status === 'checked-out';
                                     return (
                                         <div key={bid} className="flex justify-between items-center bg-white p-3 rounded-xl border border-blue-100 text-sm shadow-sm">
-                                            <span className="font-bold text-slate-700">{b.roomName}</span>
+                                            <div>
+                                                <span className="font-bold text-slate-700">{b.roomName}</span>
+                                                {b.checkInTimeStr && <p className="text-[10px] text-slate-400 mt-0.5">เช็คอิน {b.checkInTimeStr}</p>}
+                                            </div>
                                             <div className="flex items-center gap-2">
-                                                <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${isOccupied ? 'bg-blue-100 text-blue-600' : (isCheckedOut ? 'bg-slate-100 text-slate-600' : 'bg-yellow-100 text-yellow-600')}`}>{isOccupied ? 'พัก' : (isCheckedOut ? 'คืนห้อง' : 'จอง')}</span>
-                                                {isOccupied && (<button onClick={() => handleCheckoutSingle(b.id, b.keyDeposit)} className="text-[10px] bg-orange-100 text-orange-600 px-2 py-1 rounded border border-orange-200 hover:bg-orange-200">คืนห้อง</button>)}
+                                                <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${isOccupied ? 'bg-blue-100 text-blue-600' : (isCheckedOut ? 'bg-slate-100 text-slate-600' : 'bg-yellow-100 text-yellow-600')}`}>{isOccupied ? 'กำลังพัก' : (isCheckedOut ? 'คืนห้องแล้ว' : 'รอเช็คอิน')}</span>
+                                                {!isOccupied && !isCheckedOut && (<button onClick={() => handleCheckInSingle(b.id, b.roomName)} className="text-[10px] bg-emerald-100 text-emerald-700 px-2 py-1 rounded border border-emerald-200 hover:bg-emerald-200 font-bold flex items-center gap-1"><LogIn size={10}/> เช็คอิน</button>)}
+                                                {isOccupied && (<button onClick={() => handleCheckoutSingle(b.id, b.keyDeposit)} className="text-[10px] bg-orange-100 text-orange-600 px-2 py-1 rounded border border-orange-200 hover:bg-orange-200 font-bold flex items-center gap-1"><LogOut size={10}/> คืนห้อง</button>)}
                                             </div>
                                         </div>
                                     );
@@ -2722,8 +2889,8 @@ export default function App() {
                 </div>
             </div>
             {(currentBookingStatus === 'occupied' || (!isGroupCheckIn && currentBookingStatus === 'occupied')) && (
-                <div className="flex justify-end pt-4 border-t border-slate-100">
-                    <button onClick={handleCheckout} className="px-8 py-3 bg-orange-500 text-white rounded-xl font-bold shadow-lg hover:bg-orange-600 flex items-center gap-2 transition-all transform active:scale-95"><LogOut size={20}/> เช็คเอาท์ / คืนห้อง</button>
+                <div className="sticky bottom-0 bg-white pt-4 pb-2 border-t border-slate-100 -mx-6 px-6 mt-4">
+                    <button onClick={handleCheckout} className="w-full py-3 bg-orange-500 text-white rounded-xl font-bold shadow-lg hover:bg-orange-600 flex items-center justify-center gap-2 transition-all transform active:scale-95"><LogOut size={20}/> เช็คเอาท์ / คืนห้อง</button>
                 </div>
             )}
          </div>
@@ -2742,8 +2909,11 @@ export default function App() {
               <input required type="text" placeholder="ก้อน / หลอด / ชิ้น" className="w-full p-3 bg-slate-50 border-0 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none" value={consumableItemForm.unit} onChange={e => setConsumableItemForm({...consumableItemForm, unit: e.target.value})} />
             </div>
             <div>
-              <label className="block text-slate-500 font-bold mb-1.5 text-xs">ต้นทุน/หน่วย (฿)</label>
-              <input required type="number" min="0" step="0.01" className="w-full p-3 bg-slate-50 border-0 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none text-red-500 font-bold" value={consumableItemForm.costPerUnit} onChange={e => setConsumableItemForm({...consumableItemForm, costPerUnit: e.target.value})} />
+              <label className="block text-slate-500 font-bold mb-1.5 text-xs">หมวดหมู่</label>
+              <select className="w-full p-3 bg-slate-50 border-0 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none" value={consumableItemForm.category} onChange={e => setConsumableItemForm({...consumableItemForm, category: e.target.value})}>
+                <option value="">— ไม่ระบุ —</option>
+                {consumableCategories.map(cat => <option key={cat.id} value={cat.name}>{cat.name}</option>)}
+              </select>
             </div>
           </div>
           <div className="bg-slate-50 p-4 rounded-xl space-y-3 border border-slate-100">
@@ -2834,6 +3004,120 @@ export default function App() {
         )}
       </Modal>
 
+      {/* ─── Purchase Modal ─────────────────────────────────────────────────────── */}
+      <Modal isOpen={isPurchaseModalOpen} onClose={() => setIsPurchaseModalOpen(false)} title={`ซื้อของ — ${purchaseTarget?.name || ''}`}>
+        {purchaseTarget && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3 bg-slate-50 rounded-xl p-3 text-xs font-bold text-slate-600">
+              <div>คลังหลักปัจจุบัน<br/><span className="text-lg text-slate-800">{purchaseTarget.mainStock ?? purchaseTarget.stockQty ?? 0} {purchaseTarget.unit}</span></div>
+              <div>ต้นทุนเฉลี่ยปัจจุบัน<br/><span className="text-lg text-slate-800">{(purchaseTarget.avgCostPerUnit ?? purchaseTarget.costPerUnit ?? 0).toLocaleString(undefined,{maximumFractionDigits:2})} ฿/{purchaseTarget.unit}</span></div>
+            </div>
+            {purchaseTarget.packUnit && purchaseTarget.unitsPerPack > 0 && (
+              <div className="flex gap-2">
+                <button onClick={() => setPurchaseForm(f=>({...f, isPackUnit:false}))} className={`flex-1 py-2 rounded-xl font-bold text-sm border-2 transition-all ${!purchaseForm.isPackUnit ? 'border-emerald-500 bg-emerald-50 text-emerald-700' : 'border-slate-200 text-slate-400'}`}>นับ{purchaseTarget.unit}</button>
+                <button onClick={() => setPurchaseForm(f=>({...f, isPackUnit:true}))} className={`flex-1 py-2 rounded-xl font-bold text-sm border-2 transition-all ${purchaseForm.isPackUnit ? 'border-emerald-500 bg-emerald-50 text-emerald-700' : 'border-slate-200 text-slate-400'}`}>นับ{purchaseTarget.packUnit}</button>
+              </div>
+            )}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-slate-500 font-bold mb-1.5 text-xs">จำนวนที่ซื้อ ({purchaseForm.isPackUnit ? purchaseTarget.packUnit : purchaseTarget.unit})</label>
+                <input type="number" min="1" autoFocus className="w-full p-3 text-center text-2xl font-black bg-slate-50 border-0 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none" value={purchaseForm.qty} onChange={e => setPurchaseForm(f=>({...f, qty:e.target.value}))} placeholder="0"/>
+              </div>
+              <div>
+                <label className="block text-slate-500 font-bold mb-1.5 text-xs">ราคารวม (฿)</label>
+                <input type="number" min="0" step="0.01" className="w-full p-3 text-center text-2xl font-black bg-slate-50 border-0 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none text-red-500" value={purchaseForm.totalCost} onChange={e => setPurchaseForm(f=>({...f, totalCost:e.target.value}))} placeholder="0"/>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-slate-500 font-bold mb-1.5 text-xs">วันที่ซื้อ</label>
+                <input type="date" className="w-full p-2.5 bg-slate-50 border-0 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none" value={purchaseForm.date || selectedDate} onChange={e => setPurchaseForm(f=>({...f, date:e.target.value}))}/>
+              </div>
+              <div>
+                <label className="block text-slate-500 font-bold mb-1.5 text-xs">หมายเหตุ</label>
+                <input type="text" className="w-full p-2.5 bg-slate-50 border-0 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none" value={purchaseForm.note} onChange={e => setPurchaseForm(f=>({...f, note:e.target.value}))} placeholder="ร้านค้า, ล็อต..."/>
+              </div>
+            </div>
+            {purchaseForm.qty > 0 && purchaseForm.totalCost > 0 && (() => {
+              const rawQty = Number(purchaseForm.qty);
+              const units = purchaseForm.isPackUnit ? rawQty * (purchaseTarget.unitsPerPack||1) : rawQty;
+              const ppu = Number(purchaseForm.totalCost) / units;
+              const curMain = purchaseTarget.mainStock ?? purchaseTarget.stockQty ?? 0;
+              const curAvg = purchaseTarget.avgCostPerUnit ?? purchaseTarget.costPerUnit ?? 0;
+              const newAvg = (curMain + units) > 0 ? (curMain * curAvg + units * ppu) / (curMain + units) : ppu;
+              return (
+                <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-xs space-y-1">
+                  <div className="flex justify-between text-slate-600"><span>จำนวนที่ได้รับ</span><span className="font-bold">{units} {purchaseTarget.unit}</span></div>
+                  <div className="flex justify-between text-slate-600"><span>ราคาต่อหน่วย</span><span className="font-bold">{ppu.toLocaleString(undefined,{maximumFractionDigits:2})} ฿</span></div>
+                  <div className="flex justify-between text-emerald-700 font-bold border-t border-emerald-200 pt-1 mt-1"><span>ต้นทุนเฉลี่ยใหม่</span><span>{newAvg.toLocaleString(undefined,{maximumFractionDigits:2})} ฿/{purchaseTarget.unit}</span></div>
+                  <p className="text-slate-400 pt-1">✓ บันทึกรายจ่ายอัตโนมัติ {Number(purchaseForm.totalCost).toLocaleString()} ฿</p>
+                </div>
+              );
+            })()}
+            <button onClick={handlePurchase} disabled={!purchaseForm.qty || !purchaseForm.totalCost} className="w-full py-4 bg-emerald-600 text-white rounded-2xl font-bold text-lg shadow-lg shadow-emerald-200 hover:bg-emerald-700 active:scale-95 transition-all disabled:opacity-40">
+              ยืนยันการซื้อ + บันทึกรายจ่าย
+            </button>
+          </div>
+        )}
+      </Modal>
+
+      {/* ─── Transfer Modal ──────────────────────────────────────────────────────── */}
+      <Modal isOpen={isTransferModalOpen} onClose={() => setIsTransferModalOpen(false)} title={`โอน — ${transferTarget?.name || ''}`}>
+        {transferTarget && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3 bg-slate-50 rounded-xl p-3 text-xs font-bold text-slate-600 text-center">
+              <div>คลังหลัก<br/><span className="text-2xl text-slate-800">{transferTarget.mainStock ?? transferTarget.stockQty ?? 0}</span> <span className="text-xs">{transferTarget.unit}</span></div>
+              <div>คลังห้องพัก<br/><span className="text-2xl text-blue-700">{transferTarget.roomStock ?? 0}</span> <span className="text-xs">{transferTarget.unit}</span></div>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => setTransferForm(f=>({...f, direction:'toRoom'}))} className={`flex-1 py-2.5 rounded-xl font-bold text-sm border-2 transition-all ${transferForm.direction==='toRoom' ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-200 text-slate-400'}`}>คลังหลัก → ห้องพัก</button>
+              <button onClick={() => setTransferForm(f=>({...f, direction:'toMain'}))} className={`flex-1 py-2.5 rounded-xl font-bold text-sm border-2 transition-all ${transferForm.direction==='toMain' ? 'border-emerald-500 bg-emerald-50 text-emerald-700' : 'border-slate-200 text-slate-400'}`}>ห้องพัก → คลังหลัก</button>
+            </div>
+            <div>
+              <label className="block text-slate-500 font-bold mb-1.5 text-xs">จำนวน ({transferTarget.unit})</label>
+              <input type="number" min="1" autoFocus className="w-full p-4 text-center text-3xl font-black bg-slate-50 border-0 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" value={transferForm.qty} onChange={e => setTransferForm(f=>({...f, qty:e.target.value}))} placeholder="0"/>
+            </div>
+            <button onClick={handleTransfer} disabled={!transferForm.qty || Number(transferForm.qty) <= 0} className="w-full py-4 bg-blue-600 text-white rounded-2xl font-bold text-lg shadow-lg shadow-blue-200 hover:bg-blue-700 active:scale-95 transition-all disabled:opacity-40">ยืนยันโอน</button>
+          </div>
+        )}
+      </Modal>
+
+      {/* ─── Category Modal ──────────────────────────────────────────────────────── */}
+      <Modal isOpen={isCategoryModalOpen} onClose={() => setIsCategoryModalOpen(false)} title={categoryForm.id ? 'แก้ไขหมวดหมู่' : 'เพิ่มหมวดหมู่'}>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-slate-500 font-bold mb-1.5 text-xs">ชื่อหมวดหมู่</label>
+            <input autoFocus type="text" className="w-full p-3 bg-slate-50 border-0 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none" value={categoryForm.name} onChange={e => setCategoryForm(f=>({...f, name:e.target.value}))} placeholder="เช่น ทำความสะอาด, ของใช้เติมห้อง"/>
+          </div>
+          <label className="flex items-center gap-3 p-3 bg-slate-50 rounded-xl cursor-pointer">
+            <input type="checkbox" checked={categoryForm.treatRemovalAsUsed} onChange={e => setCategoryForm(f=>({...f, treatRemovalAsUsed:e.target.checked}))} className="w-4 h-4 accent-emerald-600"/>
+            <div>
+              <p className="font-bold text-sm text-slate-700">การนำออกถือเป็นการใช้งานทันที</p>
+              <p className="text-xs text-slate-400">เช่น หมวดทำความสะอาด — นำออกจากคลังหลัก = ใช้แล้ว</p>
+            </div>
+          </label>
+          <div className="flex gap-2">
+            {categoryForm.id && (
+              <button type="button" onClick={handleDeleteCategory} className="px-4 py-3 bg-red-50 text-red-500 rounded-xl font-bold hover:bg-red-100">ลบ</button>
+            )}
+            <button type="button" onClick={handleSaveCategory} className="flex-1 py-3 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700 shadow-lg shadow-emerald-200 transition-all">บันทึก</button>
+          </div>
+          {consumableCategories.length > 0 && (
+            <div className="border-t border-slate-100 pt-4">
+              <p className="text-xs font-bold text-slate-400 mb-2">หมวดหมู่ปัจจุบัน</p>
+              <div className="space-y-1">
+                {consumableCategories.map(cat => (
+                  <div key={cat.id} onClick={() => openCategoryModal(cat)} className="flex justify-between items-center px-3 py-2 bg-slate-50 rounded-lg hover:bg-slate-100 cursor-pointer text-sm">
+                    <span className="font-bold text-slate-700">{cat.name}</span>
+                    {cat.treatRemovalAsUsed && <span className="text-[10px] text-orange-600 bg-orange-50 px-2 py-0.5 rounded-full font-bold">นำออก=ใช้</span>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </Modal>
+
       {/* ─── Use Consumable Modal ───────────────────────────────────────────────── */}
       <Modal isOpen={isUseConsumableModalOpen} onClose={() => setIsUseConsumableModalOpen(false)} title="บันทึกของใช้">
         <div className="space-y-4">
@@ -2853,7 +3137,7 @@ export default function App() {
                   <div key={item.id} className="flex items-center justify-between bg-slate-50 rounded-xl px-4 py-3 border border-slate-100">
                     <div className="flex-1 min-w-0">
                       <p className="font-bold text-slate-800 text-sm truncate">{item.name}</p>
-                      <p className="text-xs text-slate-400">คงเหลือ {item.stockQty || 0} {item.unit} · {item.costPerUnit} ฿/{item.unit}</p>
+                      <p className="text-xs text-slate-400">คงเหลือ {(item.mainStock ?? item.stockQty ?? 0)} {item.unit} · {(item.avgCostPerUnit ?? item.costPerUnit ?? 0).toLocaleString(undefined,{maximumFractionDigits:2})} ฿/{item.unit}</p>
                     </div>
                     <div className="flex items-center gap-2 ml-3 flex-shrink-0">
                       <button onClick={() => setConsumableUsageMap(m => ({...m, [item.id]: Math.max(0, (Number(m[item.id])||0) - 1)}))} className="w-7 h-7 rounded-full bg-white border border-slate-200 flex items-center justify-center text-slate-500 hover:bg-slate-100 font-bold text-lg leading-none shadow-sm">−</button>
@@ -2876,11 +3160,11 @@ export default function App() {
                   {Object.entries(consumableUsageMap).filter(([,v]) => Number(v)>0).map(([cId, qty]) => {
                     const item = consumables.find(c => c.id === cId);
                     if (!item) return null;
-                    return <div key={cId} className="flex justify-between text-orange-600"><span>{item.name} × {qty} {item.unit}</span><span>{(Number(qty)*item.costPerUnit).toLocaleString()} ฿</span></div>;
+                    return <div key={cId} className="flex justify-between text-orange-600"><span>{item.name} × {qty} {item.unit}</span><span>{(Number(qty)*(item.avgCostPerUnit ?? item.costPerUnit ?? 0)).toLocaleString()} ฿</span></div>;
                   })}
                   <div className="border-t border-orange-200 mt-2 pt-2 flex justify-between font-bold text-orange-700">
                     <span>รวม</span>
-                    <span>{Object.entries(consumableUsageMap).reduce((s,[cId,qty]) => { const item=consumables.find(c=>c.id===cId); return s+(Number(qty)*(item?.costPerUnit||0)); }, 0).toLocaleString()} ฿</span>
+                    <span>{Object.entries(consumableUsageMap).reduce((s,[cId,qty]) => { const item=consumables.find(c=>c.id===cId); return s+(Number(qty)*(item?.avgCostPerUnit ?? item?.costPerUnit ?? 0)); }, 0).toLocaleString()} ฿</span>
                   </div>
                 </div>
               )}
