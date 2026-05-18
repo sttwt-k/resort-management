@@ -1,18 +1,23 @@
 import React from 'react';
 import { X } from 'lucide-react';
 
-export const Modal = ({ title, isOpen, onClose, children, maxWidth = 'max-w-lg' }) => {
+export const Modal = ({ title, isOpen, onClose, children, footer, maxWidth = 'max-w-lg' }) => {
   if (!isOpen) return null;
   return (
     <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4 overflow-y-auto">
       <div className={`bg-white rounded-[2rem] shadow-2xl w-full ${maxWidth} relative flex flex-col max-h-[95vh] animate-fade-in overflow-hidden`}>
-        <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-white sticky top-0 z-10">
+        <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-white shrink-0 z-10">
           <h2 className="text-xl font-bold text-slate-800">{title}</h2>
           <button onClick={onClose} className="p-2 bg-slate-100 rounded-full hover:bg-slate-200 text-slate-500 transition-colors">
             <X size={20} />
           </button>
         </div>
-        <div className="p-6 overflow-y-auto bg-white custom-scrollbar">{children}</div>
+        <div className="p-6 overflow-y-auto bg-white custom-scrollbar flex-1">{children}</div>
+        {footer && (
+          <div className="px-6 pb-5 pt-3 border-t border-slate-100 bg-white shrink-0">
+            {footer}
+          </div>
+        )}
       </div>
     </div>
   );

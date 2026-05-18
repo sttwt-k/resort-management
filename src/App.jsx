@@ -183,14 +183,18 @@ export default function App() {
   const [restockQty, setRestockQty] = useState('');
   const [restockIsPackUnit, setRestockIsPackUnit] = useState(false);
   const [restockTotalCost, setRestockTotalCost] = useState('');
-  const [isPurchaseModalOpen, setIsPurchaseModalOpen] = useState(false);
-  const [purchaseTarget, setPurchaseTarget] = useState(null);
-  const [purchaseForm, setPurchaseForm] = useState({qty:'', totalCost:'', date:'', isPackUnit:false, note:''});
   const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
   const [transferTarget, setTransferTarget] = useState(null);
   const [transferForm, setTransferForm] = useState({qty:'', direction:'toRoom'});
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
-  const [categoryForm, setCategoryForm] = useState({id:'', name:'', treatRemovalAsUsed:false});
+  const [categoryForm, setCategoryForm] = useState({id:'', name:'', showToStaff:true, color:'#10b981'});
+  // Purchase session (multi-item)
+  const [isPurchaseSessionOpen, setIsPurchaseSessionOpen] = useState(false);
+  const [purchaseSession, setPurchaseSession] = useState({store:'', date:'', items:[]});
+  // Log editing
+  const [isEditLogModalOpen, setIsEditLogModalOpen] = useState(false);
+  const [editLogTarget, setEditLogTarget] = useState(null);
+  const [editLogForm, setEditLogForm] = useState({qty:'', cost:'', date:'', note:''});
   const [stockCategoryFilter, setStockCategoryFilter] = useState('');
   const [isUseConsumableModalOpen, setIsUseConsumableModalOpen] = useState(false);
   const [usageTargetRoomId, setUsageTargetRoomId] = useState(null);
@@ -342,9 +346,9 @@ export default function App() {
       if (cats.length === 0) {
         // seed defaults on first run
         const defaults = [
-          {name:'ทำความสะอาด', treatRemovalAsUsed:true},
-          {name:'ของใช้เติมห้อง', treatRemovalAsUsed:false},
-          {name:'ผ้า', treatRemovalAsUsed:false},
+          {name:'ทำความสะอาด', showToStaff:true, color:'#f97316'},
+          {name:'ของใช้เติมห้อง', showToStaff:true, color:'#10b981'},
+          {name:'ผ้า', showToStaff:true, color:'#3b82f6'},
         ];
         defaults.forEach(c => addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'consumableCategories'), c));
       } else {
@@ -1181,53 +1185,6 @@ export default function App() {
     } catch(e) { showNotification('เกิดข้อผิดพลาด', 'error'); }
   };
 
-  // ── Purchase (ซื้อของ) ── weighted avg cost + auto-expense
-  const openPurchaseModal = (item) => {
-    setPurchaseTarget(item);
-    setPurchaseForm({qty:'', totalCost:'', date: selectedDate, isPackUnit:false, note:''});
-    setIsPurchaseModalOpen(true);
-  };
-
-  const handlePurchase = async () => {
-    if (!purchaseTarget || !purchaseForm.qty || !purchaseForm.totalCost) return;
-    const rawQty = Number(purchaseForm.qty);
-    const unitsToAdd = purchaseForm.isPackUnit ? rawQty * (purchaseTarget.unitsPerPack||1) : rawQty;
-    const totalCost = Number(purchaseForm.totalCost);
-    const pricePerUnit = unitsToAdd > 0 ? totalCost / unitsToAdd : 0;
-    const currentMain = purchaseTarget.mainStock ?? purchaseTarget.stockQty ?? 0;
-    const currentAvg = purchaseTarget.avgCostPerUnit ?? purchaseTarget.costPerUnit ?? 0;
-    const newAvg = (currentMain + unitsToAdd) > 0
-      ? (currentMain * currentAvg + unitsToAdd * pricePerUnit) / (currentMain + unitsToAdd)
-      : pricePerUnit;
-    const currentRoom = purchaseTarget.roomStock ?? 0;
-    try {
-      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'consumables', purchaseTarget.id), {
-        mainStock: currentMain + unitsToAdd,
-        stockQty: currentMain + unitsToAdd + currentRoom,
-        avgCostPerUnit: Math.round(newAvg * 100) / 100,
-      });
-      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'consumableLogs'), {
-        consumableId: purchaseTarget.id, consumableName: purchaseTarget.name,
-        qty: unitsToAdd, unit: purchaseTarget.unit, logType: 'purchase',
-        date: purchaseForm.date || selectedDate, cost: totalCost, pricePerUnit,
-        note: purchaseForm.note || (purchaseForm.isPackUnit ? `ซื้อ ${rawQty} ${purchaseTarget.packUnit||'แพ็ค'}` : ''),
-        createdAt: Timestamp.now(),
-      });
-      // Auto-record to expenses
-      const expDocNo = generateSequentialDocNo('EX', purchaseForm.date || selectedDate, expenses);
-      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'expenses'), {
-        docNo: expDocNo, amount: totalCost,
-        category: 'ของใช้สิ้นเปลือง (สบู่/ทิชชู่)',
-        note: `ซื้อ ${purchaseTarget.name}${purchaseForm.note ? ': '+purchaseForm.note : ''}`,
-        date: purchaseForm.date || selectedDate,
-        paymentMethod: 'เงินสด',
-        createdAt: Timestamp.now(), updatedAt: Timestamp.now(), updatedBy: user?.uid || '',
-      });
-      showNotification(`บันทึกการซื้อ + รายจ่ายอัตโนมัติแล้ว ✅`);
-      setIsPurchaseModalOpen(false);
-    } catch(e) { console.error(e); showNotification('เกิดข้อผิดพลาด', 'error'); }
-  };
-
   // ── Transfer between main ↔ room storage ──
   const openTransferModal = (item) => {
     setTransferTarget(item);
@@ -1266,14 +1223,14 @@ export default function App() {
 
   // ── Category management ──
   const openCategoryModal = (cat = null) => {
-    if (cat) setCategoryForm({id: cat.id, name: cat.name, treatRemovalAsUsed: cat.treatRemovalAsUsed||false});
-    else setCategoryForm({id:'', name:'', treatRemovalAsUsed:false});
+    if (cat) setCategoryForm({id: cat.id, name: cat.name, showToStaff: cat.showToStaff !== false, color: cat.color || '#10b981'});
+    else setCategoryForm({id:'', name:'', showToStaff:true, color:'#10b981'});
     setIsCategoryModalOpen(true);
   };
 
   const handleSaveCategory = async () => {
     if (!categoryForm.name.trim()) return;
-    const payload = {name: categoryForm.name.trim(), treatRemovalAsUsed: categoryForm.treatRemovalAsUsed};
+    const payload = {name: categoryForm.name.trim(), showToStaff: categoryForm.showToStaff, color: categoryForm.color || '#10b981'};
     try {
       if (categoryForm.id) {
         await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'consumableCategories', categoryForm.id), payload);
@@ -1282,6 +1239,90 @@ export default function App() {
       }
       showNotification('บันทึกหมวดหมู่แล้ว'); setIsCategoryModalOpen(false);
     } catch(e) { showNotification('เกิดข้อผิดพลาด', 'error'); }
+  };
+
+  // --- Purchase Session (multi-item) ---
+  const openPurchaseSession = () => {
+    setPurchaseSession({ store: '', date: formatDate(new Date()), items: [{ consumableId: '', qty: '', totalCost: '', note: '' }] });
+    setIsPurchaseSessionOpen(true);
+  };
+
+  const handleSavePurchaseSession = async () => {
+    const validItems = purchaseSession.items.filter(it => it.consumableId && Number(it.qty) > 0 && Number(it.totalCost) >= 0);
+    if (validItems.length === 0) { showNotification('กรอกข้อมูลให้ครบ', 'error'); return; }
+    if (useMockData) { showNotification('โหมดตัวอย่าง: บันทึกสำเร็จ'); setIsPurchaseSessionOpen(false); return; }
+    try {
+      const date = purchaseSession.date || formatDate(new Date());
+      const totalExpense = validItems.reduce((s, it) => s + Number(it.totalCost), 0);
+      // Update each consumable
+      for (const it of validItems) {
+        const item = consumables.find(c => c.id === it.consumableId);
+        if (!item) continue;
+        const rawQty = Number(it.qty);
+        const unitsToAdd = rawQty; // already in base unit
+        const totalCost = Number(it.totalCost);
+        const ppu = unitsToAdd > 0 ? totalCost / unitsToAdd : 0;
+        const currentMain = item.mainStock ?? item.stockQty ?? 0;
+        const currentAvg = item.avgCostPerUnit ?? item.costPerUnit ?? 0;
+        const newAvg = (currentMain + unitsToAdd) > 0
+          ? (currentMain * currentAvg + totalCost) / (currentMain + unitsToAdd) : ppu;
+        await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'consumables', item.id), {
+          mainStock: currentMain + unitsToAdd,
+          roomStock: item.roomStock ?? 0,
+          avgCostPerUnit: Math.round(newAvg * 100) / 100,
+        });
+        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'consumableLogs'), {
+          consumableId: item.id, consumableName: item.name,
+          qty: unitsToAdd, unit: item.unit, logType: 'purchase',
+          cost: totalCost, date, createdAt: Timestamp.now(),
+          note: it.note || (purchaseSession.store ? `ร้าน: ${purchaseSession.store}` : ''),
+        });
+      }
+      // Single expense record for the whole purchase
+      if (totalExpense > 0) {
+        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'expenses'), {
+          date, title: `ซื้อของใช้${purchaseSession.store ? ` — ${purchaseSession.store}` : ''}`,
+          amount: totalExpense, category: 'ของใช้สิ้นเปลือง (สบู่/ทิชชู่)',
+          payee: purchaseSession.store || 'ร้านค้า', paymentMethod: 'เงินสด', note: '',
+          createdAt: Timestamp.now(),
+        });
+      }
+      showNotification(`บันทึกการซื้อ ${validItems.length} รายการ ✅`);
+      setIsPurchaseSessionOpen(false);
+    } catch(e) { console.error(e); showNotification('เกิดข้อผิดพลาด', 'error'); }
+  };
+
+  // --- Log editing ---
+  const openEditLog = (log) => {
+    setEditLogTarget(log);
+    setEditLogForm({ qty: log.qty, cost: log.cost || 0, date: log.date || '', note: log.note || '' });
+    setIsEditLogModalOpen(true);
+  };
+
+  const handleSaveLogEdit = async () => {
+    if (!editLogTarget) return;
+    if (useMockData) { showNotification('โหมดตัวอย่าง: แก้ไขสำเร็จ'); setIsEditLogModalOpen(false); return; }
+    try {
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'consumableLogs', editLogTarget.id), {
+        qty: Number(editLogForm.qty),
+        cost: Number(editLogForm.cost),
+        date: editLogForm.date,
+        note: editLogForm.note,
+      });
+      showNotification('แก้ไขประวัติแล้ว ✅'); setIsEditLogModalOpen(false);
+    } catch(e) { showNotification('เกิดข้อผิดพลาด', 'error'); }
+  };
+
+  const handleDeleteLog = async () => {
+    if (!editLogTarget) return;
+    showConfirm({ title: 'ลบประวัติ', message: `ลบรายการนี้ออกจากประวัติ?`, variant: 'danger', confirmLabel: 'ลบ',
+      onConfirm: async () => {
+        try {
+          await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'consumableLogs', editLogTarget.id));
+          showNotification('ลบแล้ว'); setIsEditLogModalOpen(false);
+        } catch(e) { showNotification('ลบไม่สำเร็จ','error'); }
+      }
+    });
   };
 
   const handleDeleteCategory = async () => {
@@ -1779,15 +1820,15 @@ export default function App() {
                 <div className="bg-white rounded-[1.5rem] shadow-sm border border-slate-200 overflow-x-auto custom-scrollbar p-4">
                     <div className="min-w-[1000px]">
                         {/* Header row */}
-                        <div className="timeline-grid mb-1">
-                            <div className="font-bold text-slate-400 text-xs px-2 flex items-end pb-1">ห้อง</div>
+                        <div className="timeline-grid mb-0">
+                            <div className="font-bold text-slate-400 text-xs px-2 flex items-end pb-2">ห้อง</div>
                             {[...Array(14)].map((_, i) => {
                                 const date = addDays(timelineStartDate, i);
                                 const d = new Date(date + 'T00:00:00');
                                 const isWeekend = d.getDay() === 0 || d.getDay() === 6;
                                 const isToday = date === formatDate(new Date());
                                 return (
-                                    <div key={i} className={`text-center border-l border-slate-100 py-1 ${isToday ? 'bg-emerald-50 rounded-t-lg' : ''}`}>
+                                    <div key={i} className={`text-center border-l border-slate-300 py-1 ${isToday ? 'bg-emerald-50 rounded-t-lg' : ''}`}>
                                         <div className={`text-[9px] font-bold ${isWeekend ? 'text-red-400' : 'text-slate-400'}`}>{THAI_DAYS_SHORT[d.getDay()]}</div>
                                         <div className={`text-sm font-black ${isToday ? 'text-emerald-600' : isWeekend ? 'text-red-500' : 'text-slate-700'}`}>{d.getDate()}</div>
                                         <div className={`text-[9px] font-bold ${isWeekend ? 'text-red-400' : 'text-slate-400'}`}>{THAI_MONTHS_SHORT[d.getMonth()]}</div>
@@ -1796,40 +1837,55 @@ export default function App() {
                             })}
                         </div>
                         {/* Divider */}
-                        <div className="border-t-2 border-slate-200 mb-1"/>
+                        <div className="border-t-2 border-slate-400 mb-0"/>
                         {/* Room rows */}
-                        <div className="space-y-1">
-                            {rooms.map(room => (
-                                <div key={room.id} className="timeline-grid items-center h-11 hover:bg-slate-50 rounded-lg transition-colors group">
+                        <div className="">
+                            {rooms.map((room, rIdx) => (
+                                <div key={room.id} className={`timeline-grid items-center h-11 hover:bg-slate-50 transition-colors group ${rIdx < rooms.length - 1 ? 'border-b border-slate-200' : ''}`}>
                                     <div className="font-bold text-slate-700 text-xs px-2 truncate">{room.name}</div>
                                     {[...Array(14)].map((_, i) => {
                                         const currentDate = addDays(timelineStartDate, i);
-                                        const { status, booking } = checkRoomStatus(room.id, currentDate, true);
                                         const isToday = currentDate === formatDate(new Date());
-                                        if (status === 'available') {
-                                            return <div key={i} className={`h-full border-l border-slate-100 ${isToday ? 'bg-emerald-50/50' : ''}`}/>;
+                                        const { status, booking } = checkRoomStatus(room.id, currentDate, true);
+
+                                        // Also check if this day is the departure (checkOutDate) of a booking
+                                        const departureBooking = status === 'available'
+                                            ? bookings.find(b => b.roomId === room.id && b.status !== 'cancelled' && b.checkOutDate === currentDate)
+                                            : null;
+                                        const isDepartureOnly = !!departureBooking;
+
+                                        const cellBg = isToday ? 'bg-emerald-50/60' : '';
+
+                                        if (status === 'available' && !isDepartureOnly) {
+                                            return <div key={i} className={`h-full border-l border-slate-300 ${cellBg}`}/>;
                                         }
-                                        const isCheckIn = booking.checkInDate === currentDate;
-                                        const isLastNight = addDays(currentDate, 1) === booking.checkOutDate;
-                                        let bgClass = "bg-yellow-300 border-yellow-400";
-                                        if (status === 'occupied') bgClass = "bg-blue-300 border-blue-400";
-                                        if (status === 'checked-out') bgClass = "bg-slate-200 border-slate-300 opacity-50";
-                                        // Bar positioning: start at midpoint of check-in, end at midpoint of check-out
+
+                                        const effectiveBooking = isDepartureOnly ? departureBooking : booking;
+                                        const effectiveStatus  = isDepartureOnly ? departureBooking.status : status;
+
+                                        const isArrival   = !isDepartureOnly && effectiveBooking.checkInDate === currentDate;
+                                        const isDeparture = isDepartureOnly; // checkOutDate day
+
+                                        let bgClass = 'bg-yellow-300 border-yellow-400';
+                                        if (effectiveStatus === 'occupied')     bgClass = 'bg-blue-300 border-blue-400';
+                                        if (effectiveStatus === 'checked-out')  bgClass = 'bg-slate-200 border-slate-300 opacity-50';
+
+                                        // Bar spans: middle of arrival day → middle of departure day
                                         let leftPct = '0%', widthPct = '100%';
                                         let roundL = false, roundR = false;
-                                        if (isCheckIn && isLastNight) { leftPct='25%'; widthPct='50%'; roundL=true; roundR=true; }
-                                        else if (isCheckIn) { leftPct='50%'; widthPct='50%'; roundL=true; }
-                                        else if (isLastNight) { leftPct='0%'; widthPct='50%'; roundR=true; }
+                                        if (isArrival)   { leftPct = '50%'; widthPct = '50%'; roundL = true; }
+                                        if (isDeparture) { leftPct = '0%';  widthPct = '50%'; roundR = true; }
                                         const roundClass = `${roundL ? 'rounded-l-full' : ''} ${roundR ? 'rounded-r-full' : ''}`;
+
                                         return (
-                                            <div key={i} className={`relative h-full border-l border-slate-100 ${isToday ? 'bg-emerald-50/50' : ''}`}>
+                                            <div key={i} className={`relative h-full border-l border-slate-300 ${cellBg}`}>
                                                 <div
                                                     className={`absolute top-1/2 -translate-y-1/2 h-6 ${bgClass} border ${roundClass} flex items-center overflow-hidden cursor-pointer hover:opacity-80 transition-opacity`}
                                                     style={{ left: leftPct, width: widthPct }}
-                                                    title={`${booking.guestName} (${status})`}
-                                                    onClick={() => handleRoomClick(room, status, booking, 'timeline')}
+                                                    title={`${effectiveBooking.guestName} (${effectiveStatus})`}
+                                                    onClick={() => handleRoomClick(room, effectiveStatus, effectiveBooking, 'timeline')}
                                                 >
-                                                    {isCheckIn && <span className="text-[9px] font-bold text-slate-800 whitespace-nowrap px-2 truncate">{booking.guestName}</span>}
+                                                    {isArrival && <span className="text-[9px] font-bold text-slate-800 whitespace-nowrap px-2 truncate">{effectiveBooking.guestName}</span>}
                                                 </div>
                                             </div>
                                         );
@@ -1948,13 +2004,18 @@ export default function App() {
 
         {currentView === 'stock' && (
           <div className="space-y-6 animate-fade-in">
-            <div className="flex justify-between items-center">
+            <div className="flex justify-between items-center flex-wrap gap-2">
               <h2 className="text-2xl font-black text-slate-800 flex items-center gap-3"><Package className="text-emerald-500"/> สต๊อกของใช้</h2>
-              {stockSubTab === 'items' && (
-                <button onClick={() => openConsumableItemModal()} className="bg-emerald-600 text-white px-5 py-2.5 rounded-xl shadow-lg shadow-emerald-200 hover:bg-emerald-700 flex items-center gap-2 font-bold transition-all hover:-translate-y-1">
-                  <Plus size={18}/> เพิ่มรายการ
+              <div className="flex gap-2 flex-wrap">
+                <button onClick={openPurchaseSession} className="bg-emerald-600 text-white px-5 py-2.5 rounded-xl shadow-lg shadow-emerald-200 hover:bg-emerald-700 flex items-center gap-2 font-bold transition-all hover:-translate-y-1">
+                  <Receipt size={18}/> ซื้อของ
                 </button>
-              )}
+                {stockSubTab === 'items' && (
+                  <button onClick={() => openConsumableItemModal()} className="bg-slate-700 text-white px-4 py-2.5 rounded-xl shadow-lg hover:bg-slate-800 flex items-center gap-2 font-bold transition-all hover:-translate-y-1">
+                    <Plus size={18}/> เพิ่มรายการ
+                  </button>
+                )}
+              </div>
             </div>
 
             {/* Sub-tabs */}
@@ -1973,15 +2034,23 @@ export default function App() {
                   </div>
                 )}
                 {/* Category filter tabs */}
-                {consumableCategories.length > 0 && (
-                  <div className="col-span-full flex flex-wrap gap-2 mb-2">
-                    <button onClick={() => setStockCategoryFilter('')} className={`px-4 py-1.5 rounded-full font-bold text-xs transition-all ${stockCategoryFilter === '' ? 'bg-slate-700 text-white shadow' : 'bg-white text-slate-500 border border-slate-200 hover:bg-slate-50'}`}>ทั้งหมด</button>
-                    {consumableCategories.map(cat => (
-                      <button key={cat.id} onClick={() => setStockCategoryFilter(cat.name)} className={`px-4 py-1.5 rounded-full font-bold text-xs transition-all ${stockCategoryFilter === cat.name ? 'bg-emerald-600 text-white shadow' : 'bg-white text-slate-500 border border-slate-200 hover:bg-slate-50'}`}>{cat.name}</button>
-                    ))}
-                    <button onClick={() => openCategoryModal()} className="px-4 py-1.5 rounded-full font-bold text-xs bg-white text-slate-400 border border-dashed border-slate-300 hover:bg-slate-50 flex items-center gap-1"><Plus size={12}/> หมวดหมู่</button>
-                  </div>
-                )}
+                <div className="col-span-full flex flex-wrap gap-2 mb-2">
+                  <button onClick={() => setStockCategoryFilter('')} className={`px-4 py-1.5 rounded-full font-bold text-xs transition-all ${stockCategoryFilter === '' ? 'bg-slate-700 text-white shadow' : 'bg-white text-slate-500 border border-slate-200 hover:bg-slate-50'}`}>ทั้งหมด</button>
+                  {consumableCategories.map(cat => {
+                    const catColor = cat.color || '#10b981';
+                    const isActive = stockCategoryFilter === cat.name;
+                    return (
+                      <button key={cat.id} onClick={() => setStockCategoryFilter(isActive ? '' : cat.name)}
+                        className={`px-4 py-1.5 rounded-full font-bold text-xs transition-all flex items-center gap-1.5 border ${isActive ? 'text-white shadow' : 'bg-white text-slate-600 hover:bg-slate-50'}`}
+                        style={isActive ? {backgroundColor: catColor, borderColor: catColor} : {borderColor: catColor + '60'}}
+                      >
+                        <span className="w-2 h-2 rounded-full inline-block shrink-0" style={{backgroundColor: catColor}}/>
+                        {cat.name}
+                      </button>
+                    );
+                  })}
+                  <button onClick={() => openCategoryModal()} className="px-4 py-1.5 rounded-full font-bold text-xs bg-white text-slate-400 border border-dashed border-slate-300 hover:bg-slate-50 flex items-center gap-1"><Plus size={12}/> หมวดหมู่</button>
+                </div>
                 {[...consumables]
                   .filter(item => !stockCategoryFilter || item.category === stockCategoryFilter)
                   .sort((a,b) => (a.name||'').localeCompare(b.name||''))
@@ -1992,13 +2061,19 @@ export default function App() {
                   const avgCost = item.avgCostPerUnit ?? item.costPerUnit ?? 0;
                   const isOut = totalStock <= 0;
                   const isLow = !isOut && mainStock <= (item.minStock || 0);
+                  const catObj = consumableCategories.find(c => c.name === item.category);
+                  const catColor = catObj?.color || '#64748b';
                   return (
-                    <div key={item.id} className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 space-y-3 hover:shadow-md transition-shadow flex flex-col">
+                    <div key={item.id} className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 space-y-3 hover:shadow-md transition-shadow flex flex-col" style={catObj ? {borderTopColor: catColor, borderTopWidth: '3px'} : {}}>
                       <div className="flex justify-between items-start">
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
                             <h3 className="font-bold text-slate-800 text-base leading-tight">{item.name}</h3>
-                            {item.category && <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 font-bold">{item.category}</span>}
+                            {item.category && (
+                              <span className="text-[10px] px-2 py-0.5 rounded-full font-bold text-white" style={{backgroundColor: catColor}}>
+                                {item.category}
+                              </span>
+                            )}
                           </div>
                           <p className="text-xs text-slate-400 mt-0.5">
                             ต้นทุนเฉลี่ย {avgCost > 0 ? avgCost.toLocaleString(undefined,{maximumFractionDigits:2}) : '—'} ฿/{item.unit}
@@ -2022,10 +2097,7 @@ export default function App() {
                       </div>
 
                       {/* Actions */}
-                      <div className="grid grid-cols-3 gap-1.5 mt-auto pt-1">
-                        <button onClick={() => openPurchaseModal(item)} className="py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-1">
-                          <Receipt size={12}/> ซื้อของ
-                        </button>
+                      <div className="grid grid-cols-2 gap-1.5 mt-auto pt-1">
                         <button onClick={() => openTransferModal(item)} className="py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-1">
                           <ArrowRight size={12}/> โอน
                         </button>
@@ -2069,6 +2141,7 @@ export default function App() {
                         <th className="px-4 py-4">ประเภท</th>
                         <th className="px-4 py-4 text-center">จำนวน</th>
                         <th className="px-4 py-4 text-right">มูลค่า</th>
+                        <th className="px-4 py-4"/>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-50">
@@ -2087,11 +2160,12 @@ export default function App() {
                             <td className="px-4 py-3"><span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${t.cls}`}>{t.label}</span></td>
                             <td className="px-4 py-3 text-center font-bold">{t.sign}{log.qty} {log.unit}</td>
                             <td className="px-4 py-3 text-right font-medium">{log.cost > 0 ? `${(log.cost||0).toLocaleString()} ฿` : '—'}</td>
+                            <td className="px-4 py-3"><button onClick={() => openEditLog(log)} className="p-1.5 text-slate-300 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"><Edit size={13}/></button></td>
                           </tr>
                         );
                       })}
                       {consumableLogs.length === 0 && (
-                        <tr><td colSpan="5" className="px-5 py-16 text-center text-slate-400">ยังไม่มีประวัติ</td></tr>
+                        <tr><td colSpan="6" className="px-5 py-16 text-center text-slate-400">ยังไม่มีประวัติ</td></tr>
                       )}
                     </tbody>
                   </table>
@@ -2790,7 +2864,13 @@ export default function App() {
         </div>
       </Modal>
 
-      <Modal isOpen={isCheckInModalOpen} onClose={() => setIsCheckInModalOpen(false)} title={`จัดการห้องพัก (${formData.docNo})`} maxWidth="max-w-4xl">
+      <Modal isOpen={isCheckInModalOpen} onClose={() => setIsCheckInModalOpen(false)} title={`จัดการห้องพัก (${formData.docNo})`} maxWidth="max-w-4xl"
+        footer={(currentBookingStatus === 'occupied') ? (
+          <button onClick={handleCheckout} className="w-full py-3.5 bg-orange-500 text-white rounded-2xl font-bold shadow-lg shadow-orange-200 hover:bg-orange-600 flex items-center justify-center gap-2 transition-all active:scale-95">
+            <LogOut size={20}/> เช็คเอาท์ / คืนห้อง
+          </button>
+        ) : null}
+      >
          <div className="space-y-6 font-sans">
             <div className="flex flex-col md:flex-row gap-6">
                 <div className="w-full md:w-1/2 space-y-4">
@@ -2888,11 +2968,6 @@ export default function App() {
                     </div>
                 </div>
             </div>
-            {(currentBookingStatus === 'occupied' || (!isGroupCheckIn && currentBookingStatus === 'occupied')) && (
-                <div className="sticky bottom-0 bg-white pt-4 pb-2 border-t border-slate-100 -mx-6 px-6 mt-4">
-                    <button onClick={handleCheckout} className="w-full py-3 bg-orange-500 text-white rounded-xl font-bold shadow-lg hover:bg-orange-600 flex items-center justify-center gap-2 transition-all transform active:scale-95"><LogOut size={20}/> เช็คเอาท์ / คืนห้อง</button>
-                </div>
-            )}
          </div>
       </Modal>
 
@@ -3004,63 +3079,6 @@ export default function App() {
         )}
       </Modal>
 
-      {/* ─── Purchase Modal ─────────────────────────────────────────────────────── */}
-      <Modal isOpen={isPurchaseModalOpen} onClose={() => setIsPurchaseModalOpen(false)} title={`ซื้อของ — ${purchaseTarget?.name || ''}`}>
-        {purchaseTarget && (
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-3 bg-slate-50 rounded-xl p-3 text-xs font-bold text-slate-600">
-              <div>คลังหลักปัจจุบัน<br/><span className="text-lg text-slate-800">{purchaseTarget.mainStock ?? purchaseTarget.stockQty ?? 0} {purchaseTarget.unit}</span></div>
-              <div>ต้นทุนเฉลี่ยปัจจุบัน<br/><span className="text-lg text-slate-800">{(purchaseTarget.avgCostPerUnit ?? purchaseTarget.costPerUnit ?? 0).toLocaleString(undefined,{maximumFractionDigits:2})} ฿/{purchaseTarget.unit}</span></div>
-            </div>
-            {purchaseTarget.packUnit && purchaseTarget.unitsPerPack > 0 && (
-              <div className="flex gap-2">
-                <button onClick={() => setPurchaseForm(f=>({...f, isPackUnit:false}))} className={`flex-1 py-2 rounded-xl font-bold text-sm border-2 transition-all ${!purchaseForm.isPackUnit ? 'border-emerald-500 bg-emerald-50 text-emerald-700' : 'border-slate-200 text-slate-400'}`}>นับ{purchaseTarget.unit}</button>
-                <button onClick={() => setPurchaseForm(f=>({...f, isPackUnit:true}))} className={`flex-1 py-2 rounded-xl font-bold text-sm border-2 transition-all ${purchaseForm.isPackUnit ? 'border-emerald-500 bg-emerald-50 text-emerald-700' : 'border-slate-200 text-slate-400'}`}>นับ{purchaseTarget.packUnit}</button>
-              </div>
-            )}
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-slate-500 font-bold mb-1.5 text-xs">จำนวนที่ซื้อ ({purchaseForm.isPackUnit ? purchaseTarget.packUnit : purchaseTarget.unit})</label>
-                <input type="number" min="1" autoFocus className="w-full p-3 text-center text-2xl font-black bg-slate-50 border-0 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none" value={purchaseForm.qty} onChange={e => setPurchaseForm(f=>({...f, qty:e.target.value}))} placeholder="0"/>
-              </div>
-              <div>
-                <label className="block text-slate-500 font-bold mb-1.5 text-xs">ราคารวม (฿)</label>
-                <input type="number" min="0" step="0.01" className="w-full p-3 text-center text-2xl font-black bg-slate-50 border-0 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none text-red-500" value={purchaseForm.totalCost} onChange={e => setPurchaseForm(f=>({...f, totalCost:e.target.value}))} placeholder="0"/>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-slate-500 font-bold mb-1.5 text-xs">วันที่ซื้อ</label>
-                <input type="date" className="w-full p-2.5 bg-slate-50 border-0 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none" value={purchaseForm.date || selectedDate} onChange={e => setPurchaseForm(f=>({...f, date:e.target.value}))}/>
-              </div>
-              <div>
-                <label className="block text-slate-500 font-bold mb-1.5 text-xs">หมายเหตุ</label>
-                <input type="text" className="w-full p-2.5 bg-slate-50 border-0 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none" value={purchaseForm.note} onChange={e => setPurchaseForm(f=>({...f, note:e.target.value}))} placeholder="ร้านค้า, ล็อต..."/>
-              </div>
-            </div>
-            {purchaseForm.qty > 0 && purchaseForm.totalCost > 0 && (() => {
-              const rawQty = Number(purchaseForm.qty);
-              const units = purchaseForm.isPackUnit ? rawQty * (purchaseTarget.unitsPerPack||1) : rawQty;
-              const ppu = Number(purchaseForm.totalCost) / units;
-              const curMain = purchaseTarget.mainStock ?? purchaseTarget.stockQty ?? 0;
-              const curAvg = purchaseTarget.avgCostPerUnit ?? purchaseTarget.costPerUnit ?? 0;
-              const newAvg = (curMain + units) > 0 ? (curMain * curAvg + units * ppu) / (curMain + units) : ppu;
-              return (
-                <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-xs space-y-1">
-                  <div className="flex justify-between text-slate-600"><span>จำนวนที่ได้รับ</span><span className="font-bold">{units} {purchaseTarget.unit}</span></div>
-                  <div className="flex justify-between text-slate-600"><span>ราคาต่อหน่วย</span><span className="font-bold">{ppu.toLocaleString(undefined,{maximumFractionDigits:2})} ฿</span></div>
-                  <div className="flex justify-between text-emerald-700 font-bold border-t border-emerald-200 pt-1 mt-1"><span>ต้นทุนเฉลี่ยใหม่</span><span>{newAvg.toLocaleString(undefined,{maximumFractionDigits:2})} ฿/{purchaseTarget.unit}</span></div>
-                  <p className="text-slate-400 pt-1">✓ บันทึกรายจ่ายอัตโนมัติ {Number(purchaseForm.totalCost).toLocaleString()} ฿</p>
-                </div>
-              );
-            })()}
-            <button onClick={handlePurchase} disabled={!purchaseForm.qty || !purchaseForm.totalCost} className="w-full py-4 bg-emerald-600 text-white rounded-2xl font-bold text-lg shadow-lg shadow-emerald-200 hover:bg-emerald-700 active:scale-95 transition-all disabled:opacity-40">
-              ยืนยันการซื้อ + บันทึกรายจ่าย
-            </button>
-          </div>
-        )}
-      </Modal>
-
       {/* ─── Transfer Modal ──────────────────────────────────────────────────────── */}
       <Modal isOpen={isTransferModalOpen} onClose={() => setIsTransferModalOpen(false)} title={`โอน — ${transferTarget?.name || ''}`}>
         {transferTarget && (
@@ -3089,11 +3107,25 @@ export default function App() {
             <label className="block text-slate-500 font-bold mb-1.5 text-xs">ชื่อหมวดหมู่</label>
             <input autoFocus type="text" className="w-full p-3 bg-slate-50 border-0 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none" value={categoryForm.name} onChange={e => setCategoryForm(f=>({...f, name:e.target.value}))} placeholder="เช่น ทำความสะอาด, ของใช้เติมห้อง"/>
           </div>
-          <label className="flex items-center gap-3 p-3 bg-slate-50 rounded-xl cursor-pointer">
-            <input type="checkbox" checked={categoryForm.treatRemovalAsUsed} onChange={e => setCategoryForm(f=>({...f, treatRemovalAsUsed:e.target.checked}))} className="w-4 h-4 accent-emerald-600"/>
+          {/* Color picker */}
+          <div>
+            <label className="block text-slate-500 font-bold mb-2 text-xs">สีหมวดหมู่</label>
+            <div className="flex flex-wrap gap-2">
+              {['#10b981','#3b82f6','#f59e0b','#ef4444','#8b5cf6','#ec4899','#06b6d4','#84cc16','#f97316','#64748b'].map(c => (
+                <button key={c} type="button" onClick={() => setCategoryForm(f=>({...f, color:c}))}
+                  className={`w-8 h-8 rounded-full border-4 transition-all ${categoryForm.color === c ? 'border-slate-700 scale-110' : 'border-transparent'}`}
+                  style={{backgroundColor: c}}/>
+              ))}
+              <input type="color" value={categoryForm.color || '#10b981'} onChange={e => setCategoryForm(f=>({...f, color:e.target.value}))}
+                className="w-8 h-8 rounded-full cursor-pointer border-0 bg-transparent" title="เลือกสีเอง"/>
+            </div>
+          </div>
+          {/* showToStaff toggle */}
+          <label className="flex items-center gap-3 p-3 bg-slate-50 rounded-xl cursor-pointer select-none">
+            <input type="checkbox" checked={categoryForm.showToStaff !== false} onChange={e => setCategoryForm(f=>({...f, showToStaff:e.target.checked}))} className="w-4 h-4 accent-emerald-600"/>
             <div>
-              <p className="font-bold text-sm text-slate-700">การนำออกถือเป็นการใช้งานทันที</p>
-              <p className="text-xs text-slate-400">เช่น หมวดทำความสะอาด — นำออกจากคลังหลัก = ใช้แล้ว</p>
+              <p className="font-bold text-sm text-slate-700">แสดงให้พนักงานเห็น</p>
+              <p className="text-xs text-slate-400">ปิดเพื่อซ่อนหมวดนี้จากหน้าจอพนักงาน</p>
             </div>
           </label>
           <div className="flex gap-2">
@@ -3108,14 +3140,178 @@ export default function App() {
               <div className="space-y-1">
                 {consumableCategories.map(cat => (
                   <div key={cat.id} onClick={() => openCategoryModal(cat)} className="flex justify-between items-center px-3 py-2 bg-slate-50 rounded-lg hover:bg-slate-100 cursor-pointer text-sm">
-                    <span className="font-bold text-slate-700">{cat.name}</span>
-                    {cat.treatRemovalAsUsed && <span className="text-[10px] text-orange-600 bg-orange-50 px-2 py-0.5 rounded-full font-bold">นำออก=ใช้</span>}
+                    <div className="flex items-center gap-2">
+                      <span className="w-3 h-3 rounded-full shrink-0" style={{backgroundColor: cat.color || '#10b981'}}/>
+                      <span className="font-bold text-slate-700">{cat.name}</span>
+                    </div>
+                    {cat.showToStaff === false && <span className="text-[10px] text-slate-400 bg-slate-200 px-2 py-0.5 rounded-full font-bold">ซ่อนพนักงาน</span>}
                   </div>
                 ))}
               </div>
             </div>
           )}
         </div>
+      </Modal>
+
+      {/* ─── Purchase Session Modal (multi-item) ────────────────────────────────── */}
+      <Modal isOpen={isPurchaseSessionOpen} onClose={() => setIsPurchaseSessionOpen(false)} title="ซื้อของเข้าสต๊อก" maxWidth="max-w-xl"
+        footer={
+          <button onClick={handleSavePurchaseSession}
+            disabled={purchaseSession.items.filter(it => it.consumableId && Number(it.qty) > 0).length === 0}
+            className="w-full py-3.5 bg-emerald-600 text-white rounded-2xl font-bold text-base shadow-lg shadow-emerald-200 hover:bg-emerald-700 active:scale-95 transition-all disabled:opacity-40 flex items-center justify-center gap-2">
+            <Receipt size={18}/>
+            บันทึกการซื้อ + บันทึกรายจ่าย
+            {purchaseSession.items.filter(it=>it.consumableId&&Number(it.qty)>0&&Number(it.totalCost)>0).length > 0 &&
+              <span className="ml-2 font-black">({purchaseSession.items.filter(it=>it.consumableId&&Number(it.qty)>0&&Number(it.totalCost)>0).reduce((s,it)=>s+Number(it.totalCost),0).toLocaleString()} ฿)</span>
+            }
+          </button>
+        }
+      >
+        <div className="space-y-4">
+          {/* Store & date */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-slate-500 font-bold mb-1.5 text-xs">ร้านค้า</label>
+              <input type="text" placeholder="เช่น เทสโก้, ร้านค้าส่ง" className="w-full p-3 bg-slate-50 border-0 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none text-sm"
+                value={purchaseSession.store} onChange={e => setPurchaseSession(s=>({...s, store:e.target.value}))}/>
+            </div>
+            <div>
+              <label className="block text-slate-500 font-bold mb-1.5 text-xs">วันที่ซื้อ</label>
+              <input type="date" className="w-full p-3 bg-slate-50 border-0 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none text-sm"
+                value={purchaseSession.date} onChange={e => setPurchaseSession(s=>({...s, date:e.target.value}))}/>
+            </div>
+          </div>
+
+          {/* Item rows */}
+          <div>
+            <label className="block text-slate-500 font-bold mb-2 text-xs">รายการที่ซื้อ</label>
+            <div className="space-y-2">
+              {purchaseSession.items.map((it, idx) => {
+                const selItem = consumables.find(c => c.id === it.consumableId);
+                const ppu = selItem && Number(it.qty) > 0 && Number(it.totalCost) > 0
+                  ? (Number(it.totalCost) / Number(it.qty)).toFixed(2) : null;
+                return (
+                  <div key={idx} className="bg-slate-50 rounded-2xl p-3 space-y-2">
+                    <div className="flex gap-2 items-start">
+                      <select className="flex-1 p-2.5 bg-white border border-slate-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-emerald-500 outline-none"
+                        value={it.consumableId}
+                        onChange={e => setPurchaseSession(s => {
+                          const items = [...s.items];
+                          items[idx] = {...items[idx], consumableId: e.target.value};
+                          return {...s, items};
+                        })}>
+                        <option value="">-- เลือกรายการ --</option>
+                        {[...consumables].sort((a,b)=>(a.name||'').localeCompare(b.name||'')).map(c => (
+                          <option key={c.id} value={c.id}>{c.name} ({c.unit})</option>
+                        ))}
+                      </select>
+                      {purchaseSession.items.length > 1 && (
+                        <button onClick={() => setPurchaseSession(s => ({...s, items: s.items.filter((_,i)=>i!==idx)}))}
+                          className="p-2.5 text-slate-300 hover:text-red-400 hover:bg-red-50 rounded-xl transition-colors shrink-0">
+                          <X size={16}/>
+                        </button>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-400 mb-1">จำนวน {selItem ? `(${selItem.unit})` : ''}</label>
+                        <input type="number" min="0" placeholder="0" className="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-sm font-bold text-center focus:ring-2 focus:ring-emerald-500 outline-none"
+                          value={it.qty}
+                          onChange={e => setPurchaseSession(s => {
+                            const items = [...s.items];
+                            items[idx] = {...items[idx], qty: e.target.value};
+                            return {...s, items};
+                          })}/>
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-400 mb-1">ราคารวม (฿)</label>
+                        <input type="number" min="0" placeholder="0" className="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-sm font-bold text-center text-emerald-700 focus:ring-2 focus:ring-emerald-500 outline-none"
+                          value={it.totalCost}
+                          onChange={e => setPurchaseSession(s => {
+                            const items = [...s.items];
+                            items[idx] = {...items[idx], totalCost: e.target.value};
+                            return {...s, items};
+                          })}/>
+                      </div>
+                    </div>
+                    {ppu && (
+                      <p className="text-[10px] text-emerald-600 font-bold px-1">≈ {ppu} ฿/{selItem?.unit} · ต้นทุนเฉลี่ยจะถูกอัพเดต</p>
+                    )}
+                    <input type="text" placeholder="หมายเหตุ (ไม่บังคับ)" className="w-full p-2 bg-white border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-slate-300 outline-none text-slate-500"
+                      value={it.note}
+                      onChange={e => setPurchaseSession(s => {
+                        const items = [...s.items];
+                        items[idx] = {...items[idx], note: e.target.value};
+                        return {...s, items};
+                      })}/>
+                  </div>
+                );
+              })}
+            </div>
+            <button onClick={() => setPurchaseSession(s => ({...s, items: [...s.items, {consumableId:'', qty:'', totalCost:'', note:''}]}))}
+              className="mt-2 w-full py-2.5 border-2 border-dashed border-slate-200 text-slate-400 rounded-2xl font-bold text-sm hover:border-emerald-300 hover:text-emerald-600 transition-all flex items-center justify-center gap-2">
+              <Plus size={16}/> เพิ่มรายการ
+            </button>
+          </div>
+
+          {/* Summary */}
+          {purchaseSession.items.some(it => it.consumableId && Number(it.qty) > 0 && Number(it.totalCost) > 0) && (
+            <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 space-y-1 text-sm">
+              <p className="font-bold text-emerald-700 text-xs uppercase tracking-wide mb-2">สรุปยอด</p>
+              {purchaseSession.items.filter(it => it.consumableId && Number(it.qty) > 0 && Number(it.totalCost) > 0).map((it, idx) => {
+                const item = consumables.find(c => c.id === it.consumableId);
+                return (
+                  <div key={idx} className="flex justify-between text-emerald-800">
+                    <span>{item?.name} × {it.qty} {item?.unit}</span>
+                    <span className="font-bold">{Number(it.totalCost).toLocaleString()} ฿</span>
+                  </div>
+                );
+              })}
+              <div className="border-t border-emerald-300 pt-2 mt-1 flex justify-between font-black text-emerald-900">
+                <span>รวมทั้งสิ้น</span>
+                <span>{purchaseSession.items.filter(it=>it.consumableId&&Number(it.qty)>0&&Number(it.totalCost)>0).reduce((s,it)=>s+Number(it.totalCost),0).toLocaleString()} ฿</span>
+              </div>
+            </div>
+          )}
+        </div>
+      </Modal>
+
+      {/* ─── Edit Log Modal ───────────────────────────────────────────────────────── */}
+      <Modal isOpen={isEditLogModalOpen} onClose={() => setIsEditLogModalOpen(false)} title="แก้ไขประวัติ">
+        {editLogTarget && (
+          <div className="space-y-4">
+            <div className="bg-slate-50 rounded-xl px-4 py-3 text-sm text-slate-600">
+              <p className="font-bold text-slate-800">{editLogTarget.consumableName}</p>
+              <p className="text-xs text-slate-400 mt-0.5">ประเภท: {editLogTarget.logType}</p>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-slate-500 font-bold mb-1.5 text-xs">จำนวน ({editLogTarget.unit})</label>
+                <input type="number" min="0" className="w-full p-3 bg-slate-50 border-0 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none font-bold text-center"
+                  value={editLogForm.qty} onChange={e => setEditLogForm(f=>({...f, qty:e.target.value}))}/>
+              </div>
+              <div>
+                <label className="block text-slate-500 font-bold mb-1.5 text-xs">มูลค่า (฿)</label>
+                <input type="number" min="0" className="w-full p-3 bg-slate-50 border-0 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none font-bold text-center text-emerald-700"
+                  value={editLogForm.cost} onChange={e => setEditLogForm(f=>({...f, cost:e.target.value}))}/>
+              </div>
+            </div>
+            <div>
+              <label className="block text-slate-500 font-bold mb-1.5 text-xs">วันที่</label>
+              <input type="date" className="w-full p-3 bg-slate-50 border-0 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none"
+                value={editLogForm.date} onChange={e => setEditLogForm(f=>({...f, date:e.target.value}))}/>
+            </div>
+            <div>
+              <label className="block text-slate-500 font-bold mb-1.5 text-xs">หมายเหตุ</label>
+              <input type="text" className="w-full p-3 bg-slate-50 border-0 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none"
+                value={editLogForm.note} onChange={e => setEditLogForm(f=>({...f, note:e.target.value}))} placeholder="หมายเหตุ"/>
+            </div>
+            <div className="flex gap-2 pt-1">
+              <button onClick={handleDeleteLog} className="px-4 py-3 bg-red-50 text-red-500 rounded-xl font-bold hover:bg-red-100 transition-colors">ลบ</button>
+              <button onClick={handleSaveLogEdit} className="flex-1 py-3 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700 shadow-lg shadow-emerald-200 transition-all">บันทึก</button>
+            </div>
+          </div>
+        )}
       </Modal>
 
       {/* ─── Use Consumable Modal ───────────────────────────────────────────────── */}
