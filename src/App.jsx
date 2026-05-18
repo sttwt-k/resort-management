@@ -195,6 +195,8 @@ export default function App() {
   const [isEditLogModalOpen, setIsEditLogModalOpen] = useState(false);
   const [editLogTarget, setEditLogTarget] = useState(null);
   const [editLogForm, setEditLogForm] = useState({qty:'', cost:'', date:'', note:''});
+  const [isAdjustModalOpen, setIsAdjustModalOpen] = useState(false);
+  const [adjustForm, setAdjustForm] = useState({ mode:'count', consumableId:'', newCount:'', deltaDir:'+', deltaQty:'', date:'', note:'' });
   const [stockCategoryFilter, setStockCategoryFilter] = useState('');
   const [isUseConsumableModalOpen, setIsUseConsumableModalOpen] = useState(false);
   const [usageTargetRoomId, setUsageTargetRoomId] = useState(null);
@@ -1300,6 +1302,62 @@ export default function App() {
     setIsEditLogModalOpen(true);
   };
 
+  // --- Stock Adjustment ---
+  const openAdjustModal = (item = null) => {
+    setAdjustForm({
+      mode: 'count',
+      consumableId: item ? item.id : '',
+      newCount: '',
+      deltaDir: '+',
+      deltaQty: '',
+      date: formatDate(new Date()),
+      note: '',
+    });
+    setIsAdjustModalOpen(true);
+  };
+
+  const handleSaveAdjustment = async () => {
+    if (!adjustForm.consumableId) { showNotification('เลือกรายการก่อน', 'error'); return; }
+    const item = consumables.find(c => c.id === adjustForm.consumableId);
+    if (!item) return;
+    if (useMockData) { showNotification('โหมดตัวอย่าง: ปรับปรุงสต๊อกแล้ว'); setIsAdjustModalOpen(false); return; }
+
+    const currentMain = item.mainStock ?? item.stockQty ?? 0;
+    let delta = 0;
+    let newStock = 0;
+
+    if (adjustForm.mode === 'count') {
+      if (adjustForm.newCount === '') { showNotification('กรอกยอดที่นับได้', 'error'); return; }
+      newStock = Math.max(0, Number(adjustForm.newCount));
+      delta = newStock - currentMain;
+    } else {
+      if (!adjustForm.deltaQty) { showNotification('กรอกจำนวนที่ปรับ', 'error'); return; }
+      delta = adjustForm.deltaDir === '+' ? Number(adjustForm.deltaQty) : -Number(adjustForm.deltaQty);
+      newStock = Math.max(0, currentMain + delta);
+    }
+
+    try {
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'consumables', item.id), {
+        mainStock: newStock,
+        roomStock: item.roomStock ?? 0,
+      });
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'consumableLogs'), {
+        consumableId: item.id,
+        consumableName: item.name,
+        qty: Math.abs(delta),
+        unit: item.unit,
+        logType: 'adjustment',
+        adjustDir: delta >= 0 ? '+' : '-',
+        cost: 0,
+        date: adjustForm.date || formatDate(new Date()),
+        note: adjustForm.note || (adjustForm.mode === 'count' ? `นับสต๊อก: ${currentMain}→${newStock}` : ''),
+        createdAt: Timestamp.now(),
+      });
+      showNotification(delta === 0 ? 'ยืนยันยอดสต๊อกแล้ว ✅' : `ปรับสต๊อกแล้ว (${delta >= 0 ? '+' : ''}${delta} ${item.unit}) ✅`);
+      setIsAdjustModalOpen(false);
+    } catch(e) { console.error(e); showNotification('เกิดข้อผิดพลาด', 'error'); }
+  };
+
   const handleSaveLogEdit = async () => {
     if (!editLogTarget) return;
     if (useMockData) { showNotification('โหมดตัวอย่าง: แก้ไขสำเร็จ'); setIsEditLogModalOpen(false); return; }
@@ -2050,6 +2108,9 @@ export default function App() {
             <div className="flex justify-between items-center flex-wrap gap-2">
               <h2 className="text-2xl font-black text-slate-800 flex items-center gap-3"><Package className="text-emerald-500"/> สต๊อกของใช้</h2>
               <div className="flex gap-2 flex-wrap">
+                <button onClick={() => openAdjustModal()} className="bg-amber-500 text-white px-5 py-2.5 rounded-xl shadow-lg shadow-amber-200 hover:bg-amber-600 flex items-center gap-2 font-bold transition-all hover:-translate-y-1">
+                  <Layers size={18}/> ปรับปรุงสต๊อก
+                </button>
                 <button onClick={openPurchaseSession} className="bg-emerald-600 text-white px-5 py-2.5 rounded-xl shadow-lg shadow-emerald-200 hover:bg-emerald-700 flex items-center gap-2 font-bold transition-all hover:-translate-y-1">
                   <Receipt size={18}/> ซื้อของ
                 </button>
@@ -2140,12 +2201,15 @@ export default function App() {
                       </div>
 
                       {/* Actions */}
-                      <div className="grid grid-cols-2 gap-1.5 mt-auto pt-1">
+                      <div className="grid grid-cols-3 gap-1.5 mt-auto pt-1">
                         <button onClick={() => openTransferModal(item)} className="py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-1">
                           <ArrowRight size={12}/> โอน
                         </button>
                         <button onClick={() => { setUsageTargetRoomId(null); setConsumableUsageMap({}); setIsUseConsumableModalOpen(true); }} className="py-2 bg-orange-50 hover:bg-orange-100 text-orange-700 border border-orange-200 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-1">
                           <Minus size={12}/> ใช้
+                        </button>
+                        <button onClick={() => openAdjustModal(item)} className="py-2 bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-1">
+                          <Edit size={12}/> ปรับ
                         </button>
                       </div>
                     </div>
@@ -2190,10 +2254,11 @@ export default function App() {
                     <tbody className="divide-y divide-slate-50">
                       {[...consumableLogs].sort((a,b) => (b.createdAt?.seconds||0) - (a.createdAt?.seconds||0)).slice(0,200).map(log => {
                         const typeMap = {
-                          purchase: {label:'ซื้อ', cls:'bg-emerald-100 text-emerald-700', sign:'+'},
-                          restock:  {label:'เติม', cls:'bg-teal-100 text-teal-700', sign:'+'},
-                          use:      {label:'ใช้',  cls:'bg-orange-100 text-orange-700', sign:'-'},
-                          transfer: {label: log.direction==='toRoom'?'โอนห้อง':'คืนคลัง', cls:'bg-blue-100 text-blue-700', sign:'→'},
+                          purchase:   {label:'ซื้อ',  cls:'bg-emerald-100 text-emerald-700', sign:'+'},
+                          restock:    {label:'เติม',  cls:'bg-teal-100 text-teal-700',    sign:'+'},
+                          use:        {label:'ใช้',   cls:'bg-orange-100 text-orange-700', sign:'-'},
+                          transfer:   {label: log.direction==='toRoom'?'โอนห้อง':'คืนคลัง', cls:'bg-blue-100 text-blue-700', sign:'→'},
+                          adjustment: {label:'ปรับปรุง', cls:'bg-amber-100 text-amber-700', sign: log.adjustDir === '-' ? '-' : '+'},
                         };
                         const t = typeMap[log.logType] || {label:log.logType, cls:'bg-slate-100 text-slate-600', sign:''};
                         return (
@@ -3337,6 +3402,118 @@ export default function App() {
               </div>
             </div>
           )}
+        </div>
+      </Modal>
+
+      {/* ─── Stock Adjustment Modal ──────────────────────────────────────────────── */}
+      <Modal isOpen={isAdjustModalOpen} onClose={() => setIsAdjustModalOpen(false)} title="ปรับปรุงสต๊อก"
+        footer={
+          <button onClick={handleSaveAdjustment}
+            className="w-full py-3.5 bg-amber-500 text-white rounded-2xl font-bold text-base shadow-lg shadow-amber-200 hover:bg-amber-600 active:scale-95 transition-all flex items-center justify-center gap-2">
+            <Layers size={18}/> ยืนยันปรับปรุงสต๊อก
+          </button>
+        }
+      >
+        <div className="space-y-4">
+          {/* Mode tabs */}
+          <div className="bg-slate-100 p-1 rounded-xl flex gap-1">
+            <button onClick={() => setAdjustForm(f=>({...f, mode:'count'}))}
+              className={`flex-1 py-2 rounded-lg font-bold text-sm transition-all ${adjustForm.mode==='count' ? 'bg-white text-amber-600 shadow-sm' : 'text-slate-400'}`}>
+              🔢 นับยอดจริง
+            </button>
+            <button onClick={() => setAdjustForm(f=>({...f, mode:'delta'}))}
+              className={`flex-1 py-2 rounded-lg font-bold text-sm transition-all ${adjustForm.mode==='delta' ? 'bg-white text-amber-600 shadow-sm' : 'text-slate-400'}`}>
+              ✏️ ปรับปรุงยอด
+            </button>
+          </div>
+
+          {/* Item selector */}
+          <div>
+            <label className="block text-slate-500 font-bold mb-1.5 text-xs">รายการสต๊อก</label>
+            <select className="w-full p-3 bg-slate-50 border-0 rounded-xl focus:ring-2 focus:ring-amber-400 outline-none font-bold"
+              value={adjustForm.consumableId}
+              onChange={e => setAdjustForm(f=>({...f, consumableId:e.target.value}))}>
+              <option value="">-- เลือกรายการ --</option>
+              {[...consumables].sort((a,b)=>(a.name||'').localeCompare(b.name||'')).map(c => (
+                <option key={c.id} value={c.id}>{c.name} ({c.unit})</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Current stock display */}
+          {adjustForm.consumableId && (() => {
+            const selItem = consumables.find(c => c.id === adjustForm.consumableId);
+            if (!selItem) return null;
+            const currentMain = selItem.mainStock ?? selItem.stockQty ?? 0;
+            const newCount = adjustForm.mode === 'count' ? Number(adjustForm.newCount || 0) : currentMain + (adjustForm.deltaDir === '+' ? Number(adjustForm.deltaQty||0) : -Number(adjustForm.deltaQty||0));
+            const delta = newCount - currentMain;
+            return (
+              <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4">
+                <div className="flex items-center justify-between">
+                  <div className="text-center">
+                    <p className="text-xs font-bold text-slate-400 mb-1">ยอดปัจจุบัน</p>
+                    <p className="text-2xl font-black text-slate-700">{currentMain} <span className="text-sm">{selItem.unit}</span></p>
+                  </div>
+                  <ArrowRight size={20} className="text-amber-400"/>
+                  <div className="text-center">
+                    <p className="text-xs font-bold text-slate-400 mb-1">ยอดใหม่</p>
+                    <p className={`text-2xl font-black ${delta > 0 ? 'text-emerald-600' : delta < 0 ? 'text-red-500' : 'text-slate-700'}`}>
+                      {Math.max(0, newCount)} <span className="text-sm">{selItem.unit}</span>
+                    </p>
+                  </div>
+                </div>
+                {delta !== 0 && (
+                  <p className={`text-center text-sm font-bold mt-2 ${delta > 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                    {delta > 0 ? `+${delta}` : delta} {selItem.unit}
+                  </p>
+                )}
+                {delta === 0 && adjustForm.mode==='count' && adjustForm.newCount !== '' && (
+                  <p className="text-center text-sm font-bold mt-2 text-slate-500">ยอดตรงกัน ✓</p>
+                )}
+              </div>
+            );
+          })()}
+
+          {/* Mode-specific inputs */}
+          {adjustForm.mode === 'count' ? (
+            <div>
+              <label className="block text-slate-500 font-bold mb-1.5 text-xs">ยอดที่นับได้จริง</label>
+              <input type="number" min="0" placeholder="0" autoFocus
+                className="w-full p-3 bg-slate-50 border-0 rounded-xl focus:ring-2 focus:ring-amber-400 outline-none font-black text-2xl text-center"
+                value={adjustForm.newCount}
+                onChange={e => setAdjustForm(f=>({...f, newCount:e.target.value}))}/>
+            </div>
+          ) : (
+            <div>
+              <label className="block text-slate-500 font-bold mb-1.5 text-xs">จำนวนที่ปรับ</label>
+              <div className="flex gap-2">
+                <div className="flex rounded-xl border border-slate-200 overflow-hidden shrink-0">
+                  <button onClick={() => setAdjustForm(f=>({...f, deltaDir:'+'}))}
+                    className={`px-4 py-3 font-black text-lg transition-all ${adjustForm.deltaDir==='+' ? 'bg-emerald-500 text-white' : 'bg-white text-slate-400'}`}>+</button>
+                  <button onClick={() => setAdjustForm(f=>({...f, deltaDir:'-'}))}
+                    className={`px-4 py-3 font-black text-lg transition-all ${adjustForm.deltaDir==='-' ? 'bg-red-500 text-white' : 'bg-white text-slate-400'}`}>−</button>
+                </div>
+                <input type="number" min="0" placeholder="0" autoFocus
+                  className="flex-1 p-3 bg-slate-50 border-0 rounded-xl focus:ring-2 focus:ring-amber-400 outline-none font-black text-2xl text-center"
+                  value={adjustForm.deltaQty}
+                  onChange={e => setAdjustForm(f=>({...f, deltaQty:e.target.value}))}/>
+              </div>
+            </div>
+          )}
+
+          {/* Date + Note */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-slate-500 font-bold mb-1.5 text-xs">วันที่</label>
+              <input type="date" className="w-full p-3 bg-slate-50 border-0 rounded-xl focus:ring-2 focus:ring-amber-400 outline-none text-sm"
+                value={adjustForm.date} onChange={e => setAdjustForm(f=>({...f, date:e.target.value}))}/>
+            </div>
+            <div>
+              <label className="block text-slate-500 font-bold mb-1.5 text-xs">หมายเหตุ</label>
+              <input type="text" placeholder="เหตุผล..." className="w-full p-3 bg-slate-50 border-0 rounded-xl focus:ring-2 focus:ring-amber-400 outline-none text-sm"
+                value={adjustForm.note} onChange={e => setAdjustForm(f=>({...f, note:e.target.value}))}/>
+            </div>
+          </div>
         </div>
       </Modal>
 
