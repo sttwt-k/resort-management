@@ -202,6 +202,12 @@ export default function App() {
   const [usageTargetRoomId, setUsageTargetRoomId] = useState(null);
   const [consumableUsageMap, setConsumableUsageMap] = useState({});
   const [stockSubTab, setStockSubTab] = useState('items');
+  const [isReorderModalOpen, setIsReorderModalOpen] = useState(false);
+  // Housekeeping
+  const [isHousekeepingViewOpen, setIsHousekeepingViewOpen] = useState(false);
+  const [isCleaningRecordOpen, setIsCleaningRecordOpen] = useState(false);
+  const [cleaningTargetRoomId, setCleaningTargetRoomId] = useState(null);
+  const [cleaningUsageMap, setCleaningUsageMap] = useState({});
   const [expenseModalMode, setExpenseModalMode] = useState('create');
 
   // Derived State
@@ -563,18 +569,20 @@ export default function App() {
               onConfirm: async () => {
                   try {
                       if (useMockData) { showNotification('โหมดตัวอย่าง: คืนห้องสำเร็จ'); setSelectedStaffRooms([]); return; }
-                      const batchPromises = selectedStaffRooms.map(rId => {
+                      const checkoutRooms = selectedStaffRooms.map(rId => {
                           const { status, booking } = checkRoomStatus(rId, selectedDate, false);
                           if (status !== 'occupied') return null;
-                          return updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', booking.id), {
-                              status: 'checked-out',
-                              checkOutDate: selectedDate,
-                              checkOutTime: Timestamp.now(),
-                              keyDepositReturned: true
-                          });
+                          return { rId, booking };
                       }).filter(Boolean);
+                      const batchPromises = checkoutRooms.flatMap(({ rId, booking }) => [
+                          updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', booking.id), {
+                              status: 'checked-out', checkOutDate: selectedDate,
+                              checkOutTime: Timestamp.now(), keyDepositReturned: true
+                          }),
+                          updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'rooms', rId), { cleaningStatus: 'dirty' })
+                      ]);
                       if(batchPromises.length > 0) await Promise.all(batchPromises);
-                      showNotification(`คืนห้อง ${batchPromises.length} ห้อง เรียบร้อยแล้ว`);
+                      showNotification(`คืนห้อง ${checkoutRooms.length} ห้อง เรียบร้อยแล้ว`);
                       setSelectedStaffRooms([]);
                   } catch (e) {
                       console.error(e);
@@ -685,7 +693,7 @@ export default function App() {
         const { status, booking } = checkRoomStatus(r.id, selectedDate, false);
         if (status === 'occupied') {
             const nights = booking.nights || 1;
-            const totalCost = (booking.roomPrice * nights) + (booking.extraBedPrice || 0) + (booking.keyDeposit || 0);
+            const totalCost = (booking.roomPrice * nights) + (booking.extraBedPrice || 0);
             const totalPaid = (booking.totalPaid || 0) + (booking.deposit || 0);
             const remaining = totalCost - totalPaid;
             const statusText = remaining > 0 ? `(ค้าง ${remaining.toLocaleString()})` : '(ครบ)';
@@ -956,7 +964,13 @@ export default function App() {
          try {
              const payload = { status: 'checked-out', checkOutTime: Timestamp.now(), checkOutTimeStr: getNowTimeStr(), keyDepositReturned: true };
              if (adjustedNights) { payload.checkOutDate = today; payload.nights = adjustedNights; payload.totalPrice = adjustedPrice; }
+             // Update all rooms in the group to needs-cleaning
+             const groupBids = formData.groupCheckInRooms?.length > 0 ? formData.groupCheckInRooms : [formData.id];
+             const groupBookingDocs = bookings.filter(b => groupBids.includes(b.id));
              await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', formData.id), payload);
+             await Promise.all(groupBookingDocs.map(b =>
+               b.roomId ? updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'rooms', b.roomId), { cleaningStatus: 'dirty' }) : null
+             ).filter(Boolean));
              setIsCheckInModalOpen(false);
              showNotification(adjustedNights ? "เช็คเอาท์และปรับปรุงยอดเงินเรียบร้อย ✅" : "เช็คเอาท์เรียบร้อย ✅");
          } catch(e) { showNotification('เกิดข้อผิดพลาด', 'error'); }
@@ -997,6 +1011,8 @@ export default function App() {
              if (useMockData) { showNotification('โหมดตัวอย่าง: เช็คเอาท์สำเร็จ'); return; }
              try {
                  await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', bid), { status: 'checked-out', checkOutTime: Timestamp.now(), checkOutTimeStr: getNowTimeStr(), keyDepositReturned: true });
+                 const bkDoc = bookings.find(b => b.id === bid);
+                 if (bkDoc?.roomId) await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'rooms', bkDoc.roomId), { cleaningStatus: 'dirty' });
                  showNotification("เช็คเอาท์เรียบร้อย ✅");
              } catch (error) { showNotification("เกิดข้อผิดพลาด", "error"); }
          }
@@ -1426,6 +1442,39 @@ export default function App() {
     });
   };
 
+  // --- Housekeeping handlers ---
+  const openCleaningRecord = (roomId) => {
+    setCleaningTargetRoomId(roomId);
+    setCleaningUsageMap({});
+    setIsCleaningRecordOpen(true);
+  };
+
+  const handleMarkRoomClean = async () => {
+    if (!cleaningTargetRoomId) return;
+    if (useMockData) { showNotification('โหมดตัวอย่าง: ห้องสะอาดแล้ว ✅'); setIsCleaningRecordOpen(false); return; }
+    try {
+      // Record consumables used during cleaning
+      const usedEntries = Object.entries(cleaningUsageMap).filter(([,v]) => Number(v) > 0);
+      const today = formatDate(new Date());
+      for (const [cId, qty] of usedEntries) {
+        const item = consumables.find(c => c.id === cId);
+        if (!item) continue;
+        const newMain = Math.max(0, (item.mainStock ?? item.stockQty ?? 0) - Number(qty));
+        await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'consumables', item.id), { mainStock: newMain });
+        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'consumableLogs'), {
+          consumableId: item.id, consumableName: item.name, qty: Number(qty),
+          unit: item.unit, logType: 'use', cost: Number(qty) * (item.avgCostPerUnit ?? 0),
+          date: today, roomId: cleaningTargetRoomId,
+          note: 'ทำความสะอาดห้อง', createdAt: Timestamp.now(),
+        });
+      }
+      // Mark room clean
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'rooms', cleaningTargetRoomId), { cleaningStatus: 'clean' });
+      showNotification('ทำความสะอาดเสร็จแล้ว ✅');
+      setIsCleaningRecordOpen(false);
+    } catch(e) { console.error(e); showNotification('เกิดข้อผิดพลาด', 'error'); }
+  };
+
   const handleDeleteCategory = async () => {
     if (!categoryForm.id) return;
     showConfirm({ title:'ลบหมวดหมู่', message:`ลบ "${categoryForm.name}"?`, variant:'danger', confirmLabel:'ลบ',
@@ -1724,6 +1773,15 @@ export default function App() {
               )}
               {role === 'staff' && (
                   <div className="flex items-center gap-2">
+                      {(() => {
+                        const dirtyCount = rooms.filter(r => r.cleaningStatus === 'dirty').length;
+                        return (
+                          <button onClick={() => setIsHousekeepingViewOpen(true)} className={`relative px-3 py-2 rounded-xl font-bold text-sm flex items-center gap-1.5 transition-all ${dirtyCount > 0 ? 'bg-purple-100 text-purple-700 border border-purple-300 animate-pulse' : 'bg-white text-slate-500 border border-slate-200 hover:bg-slate-50'}`}>
+                            🧹 <span className="hidden sm:inline">แม่บ้าน</span>
+                            {dirtyCount > 0 && <span className="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-[10px] font-black rounded-full min-w-[18px] h-[18px] flex items-center justify-center">{dirtyCount}</span>}
+                          </button>
+                        );
+                      })()}
                       {selectedStaffRooms.length > 0 ? (
                           <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 p-1.5 rounded-xl animate-fade-in shadow-sm">
                               <span className="font-black text-emerald-700 px-2 text-sm">{selectedStaffRooms.length} ห้อง</span>
@@ -1774,6 +1832,14 @@ export default function App() {
                         <button onClick={() => {setIsRoomSettingsOpen(true); setIsMobileMenuOpen(false);}} className="p-4 rounded-xl text-lg font-bold flex items-center gap-3 text-slate-500"><Settings size={24}/> ตั้งค่า</button>
                     </>
                 )}
+                {role === 'staff' && (
+                  <button onClick={() => { setIsHousekeepingViewOpen(true); setIsMobileMenuOpen(false); }} className="p-4 rounded-xl text-lg font-bold flex items-center gap-3 text-purple-700 bg-purple-50">
+                    🧹 แม่บ้าน
+                    {rooms.filter(r => r.cleaningStatus === 'dirty').length > 0 && (
+                      <span className="ml-auto bg-red-500 text-white text-xs font-black rounded-full px-2 py-0.5">{rooms.filter(r => r.cleaningStatus === 'dirty').length} ห้อง</span>
+                    )}
+                  </button>
+                )}
                 <button onClick={() => setRole(null)} className="p-4 rounded-xl text-lg font-bold flex items-center gap-3 text-red-500 bg-red-50"><LogOut size={24}/> ออกจากระบบ</button>
             </div>
         )}
@@ -1823,10 +1889,12 @@ export default function App() {
                 let remainingAmount = 0;
                 if (status === 'occupied') {
                       const nights = booking.nights || 1;
-                      const totalCost = (booking.roomPrice * nights) + (booking.extraBedPrice || 0) + (booking.keyDeposit || 0);
+                      // keyDeposit excluded: it's a refundable security deposit tracked separately
+                      const totalCost = (booking.roomPrice * nights) + (booking.extraBedPrice || 0);
                       const totalPaid = (booking.totalPaid || 0) + (booking.deposit || 0);
                       remainingAmount = totalCost - totalPaid;
                 }
+                if (status === 'available' && room.cleaningStatus === 'dirty') { cardClass = "bg-purple-50 border-2 border-purple-200 shadow-sm"; statusColor = "bg-purple-200 text-purple-800"; statusLabel = "รอสะอาด"; icon = <span className="text-2xl">🧹</span>; }
                 if (status === 'booked') { cardClass = "bg-yellow-50 border-2 border-yellow-200 shadow-sm"; statusColor = "bg-yellow-200 text-yellow-800"; statusLabel = "จอง"; icon = <Calendar size={24} className="text-yellow-500"/>; }
                 if (status === 'occupied') { cardClass = "bg-blue-50 border-2 border-blue-200 shadow-sm"; statusColor = "bg-blue-200 text-blue-800"; statusLabel = "พัก"; icon = <User size={24} className="text-blue-500"/>; }
                 if (status === 'temporary') { cardClass = "bg-amber-50 border-2 border-amber-300 shadow-sm"; statusColor = "bg-amber-200 text-amber-800"; statusLabel = "ชั่วคราว"; icon = <Clock size={24} className="text-amber-500"/>; }
@@ -1966,6 +2034,10 @@ export default function App() {
 
                                         const isArrival   = !isDepartureOnly && effectiveBooking.checkInDate === currentDate;
                                         const isDeparture = isDepartureOnly; // checkOutDate day
+                                        // Show name on first full-width cell (day after arrival); fall back to arrival cell for 1-night stays
+                                        const isFirstMiddle = !isArrival && !isDeparture && currentDate === addDays(effectiveBooking.checkInDate, 1);
+                                        const bookingNights = calculateNights(effectiveBooking.checkInDate, effectiveBooking.checkOutDate);
+                                        const showGuestName = isFirstMiddle || (isArrival && bookingNights <= 1);
 
                                         let bgClass = 'bg-yellow-300 border-yellow-400';
                                         if (effectiveStatus === 'occupied')     bgClass = 'bg-blue-300 border-blue-400';
@@ -1986,7 +2058,7 @@ export default function App() {
                                                     title={`${effectiveBooking.guestName} (${effectiveStatus})`}
                                                     onClick={() => handleRoomClick(room, effectiveStatus, effectiveBooking, 'timeline')}
                                                 >
-                                                    {isArrival && <span className="text-[9px] font-bold text-slate-800 whitespace-nowrap px-2 truncate">{effectiveBooking.guestName}</span>}
+                                                    {showGuestName && <span className="text-[9px] font-bold text-slate-800 whitespace-nowrap pl-2 overflow-hidden">{effectiveBooking.guestName}</span>}
                                                 </div>
                                             </div>
                                         );
@@ -2114,6 +2186,18 @@ export default function App() {
                 <button onClick={openPurchaseSession} className="bg-emerald-600 text-white px-5 py-2.5 rounded-xl shadow-lg shadow-emerald-200 hover:bg-emerald-700 flex items-center gap-2 font-bold transition-all hover:-translate-y-1">
                   <Receipt size={18}/> ซื้อของ
                 </button>
+                {(() => {
+                  const lowCount = consumables.filter(item => {
+                    const s = item.mainStock ?? item.stockQty ?? 0;
+                    return s <= (item.minStock ?? 0);
+                  }).length;
+                  return (
+                    <button onClick={() => setIsReorderModalOpen(true)} className="relative bg-white border border-amber-300 text-amber-700 px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-amber-50 transition-all hover:-translate-y-1">
+                      <AlertCircle size={18}/> แนะนำซื้อ
+                      {lowCount > 0 && <span className="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-[10px] font-black rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1">{lowCount}</span>}
+                    </button>
+                  );
+                })()}
                 {stockSubTab === 'items' && (
                   <button onClick={() => openConsumableItemModal()} className="bg-slate-700 text-white px-4 py-2.5 rounded-xl shadow-lg hover:bg-slate-800 flex items-center gap-2 font-bold transition-all hover:-translate-y-1">
                     <Plus size={18}/> เพิ่มรายการ
@@ -2191,12 +2275,22 @@ export default function App() {
                       <div className="grid grid-cols-2 gap-2">
                         <div className={`rounded-xl border px-3 py-2 ${isOut ? 'border-red-200 bg-red-50' : isLow ? 'border-amber-200 bg-amber-50' : 'border-slate-200 bg-slate-50'}`}>
                           <p className="text-[10px] font-bold text-slate-400 uppercase mb-0.5">คลังหลัก</p>
-                          <p className={`text-xl font-black ${isOut ? 'text-red-600' : isLow ? 'text-amber-600' : 'text-slate-700'}`}>{mainStock} <span className="text-xs font-bold">{item.unit}</span></p>
+                          <p className={`text-xl font-black ${isOut ? 'text-red-600' : isLow ? 'text-amber-600' : 'text-slate-700'}`}>
+                            {mainStock} <span className="text-xs font-bold">{item.unit}</span>
+                            {item.packUnit && item.unitsPerPack > 0 && mainStock > 0 && (
+                              <span className="text-xs font-normal text-slate-400 ml-1">≈ {(mainStock / item.unitsPerPack).toFixed(1)} {item.packUnit}</span>
+                            )}
+                          </p>
                           {(isOut || isLow) && <p className="text-[10px] font-bold text-current mt-0.5 flex items-center gap-1"><AlertCircle size={10}/>{isOut ? 'หมด' : 'ใกล้หมด'}</p>}
                         </div>
                         <div className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2">
                           <p className="text-[10px] font-bold text-blue-400 uppercase mb-0.5">คลังห้องพัก</p>
-                          <p className="text-xl font-black text-blue-700">{roomStock} <span className="text-xs font-bold">{item.unit}</span></p>
+                          <p className="text-xl font-black text-blue-700">
+                            {roomStock} <span className="text-xs font-bold">{item.unit}</span>
+                            {item.packUnit && item.unitsPerPack > 0 && roomStock > 0 && (
+                              <span className="text-xs font-normal text-blue-400 ml-1">≈ {(roomStock / item.unitsPerPack).toFixed(1)} {item.packUnit}</span>
+                            )}
+                          </p>
                         </div>
                       </div>
 
@@ -3561,6 +3655,15 @@ export default function App() {
           {consumables.length === 0 ? (
             <p className="text-center text-slate-400 py-8">ยังไม่มีรายการของใช้</p>
           ) : (
+            (() => {
+              const staffVisibleConsumables = [...consumables]
+                .filter(item => {
+                  if (role !== 'staff') return true;
+                  const cat = consumableCategories.find(c => c.name === item.category);
+                  return !cat || cat.showToStaff !== false;
+                })
+                .sort((a,b) => (a.name||'').localeCompare(b.name||''));
+              return (
             <>
               <div>
                 <label className="block text-slate-500 font-bold mb-2 text-xs">ห้องที่บันทึก (ไม่บังคับ)</label>
@@ -3570,7 +3673,7 @@ export default function App() {
                 </select>
               </div>
               <div className="space-y-2 max-h-64 overflow-y-auto pr-1 custom-scrollbar">
-                {[...consumables].sort((a,b) => (a.name||'').localeCompare(b.name||'')).map(item => (
+                {staffVisibleConsumables.map(item => (
                   <div key={item.id} className="flex items-center justify-between bg-slate-50 rounded-xl px-4 py-3 border border-slate-100">
                     <div className="flex-1 min-w-0">
                       <p className="font-bold text-slate-800 text-sm truncate">{item.name}</p>
@@ -3609,8 +3712,161 @@ export default function App() {
                 บันทึกการใช้
               </button>
             </>
+              );
+            })()
           )}
         </div>
+      </Modal>
+
+      {/* ─── Housekeeping Panel ─────────────────────────────────────────────────── */}
+      {isHousekeepingViewOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[70] flex items-end sm:items-center justify-center p-4" onClick={() => setIsHousekeepingViewOpen(false)}>
+          <div className="bg-white rounded-[2rem] shadow-2xl w-full max-w-md max-h-[85vh] flex flex-col animate-slide-up sm:animate-fade-in overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center shrink-0">
+              <div>
+                <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">🧹 แม่บ้าน</h2>
+                <p className="text-xs text-slate-400 mt-0.5">ห้องที่รอทำความสะอาด</p>
+              </div>
+              <button onClick={() => setIsHousekeepingViewOpen(false)} className="p-2 bg-slate-100 rounded-full hover:bg-slate-200 text-slate-500"><X size={20}/></button>
+            </div>
+            <div className="p-4 overflow-y-auto flex-1 space-y-2">
+              {rooms.filter(r => r.cleaningStatus === 'dirty').length === 0 ? (
+                <div className="text-center py-12">
+                  <div className="text-5xl mb-3">✨</div>
+                  <p className="font-bold text-slate-600 text-lg">ห้องสะอาดครบแล้ว!</p>
+                  <p className="text-sm text-slate-400 mt-1">ไม่มีห้องรอทำความสะอาด</p>
+                </div>
+              ) : (
+                rooms.filter(r => r.cleaningStatus === 'dirty').map(room => (
+                  <div key={room.id} className="flex items-center justify-between bg-purple-50 border border-purple-200 rounded-2xl px-4 py-3">
+                    <div>
+                      <p className="font-bold text-slate-800">{room.name}</p>
+                      <p className="text-xs text-purple-600 font-bold">รอทำความสะอาด</p>
+                    </div>
+                    <button
+                      onClick={() => { setIsHousekeepingViewOpen(false); openCleaningRecord(room.id); }}
+                      className="bg-purple-600 text-white px-4 py-2 rounded-xl font-bold text-sm hover:bg-purple-700 active:scale-95 transition-all shadow-sm shadow-purple-200"
+                    >
+                      เริ่มทำสะอาด
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── Cleaning Record Modal ───────────────────────────────────────────────── */}
+      <Modal isOpen={isCleaningRecordOpen} onClose={() => setIsCleaningRecordOpen(false)}
+        title={`ทำความสะอาด — ${rooms.find(r => r.id === cleaningTargetRoomId)?.name || ''}`}
+        footer={
+          <button onClick={handleMarkRoomClean} className="w-full py-3.5 bg-purple-600 text-white rounded-2xl font-bold shadow-lg shadow-purple-200 hover:bg-purple-700 flex items-center justify-center gap-2 transition-all active:scale-95">
+            ✅ ทำความสะอาดเสร็จแล้ว
+          </button>
+        }
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-slate-500">บันทึกของใช้ที่นำไปใช้ในห้องนี้ (ไม่บังคับ)</p>
+          {consumables.filter(item => {
+            const cat = consumableCategories.find(c => c.name === item.category);
+            return !cat || cat.showToStaff !== false;
+          }).sort((a,b) => (a.name||'').localeCompare(b.name||'')).length === 0 ? (
+            <p className="text-center text-slate-400 py-4 text-sm">ไม่มีรายการของใช้</p>
+          ) : (
+            <div className="space-y-2 max-h-72 overflow-y-auto pr-1 custom-scrollbar">
+              {consumables.filter(item => {
+                const cat = consumableCategories.find(c => c.name === item.category);
+                return !cat || cat.showToStaff !== false;
+              }).sort((a,b) => (a.name||'').localeCompare(b.name||'')).map(item => (
+                <div key={item.id} className="flex items-center justify-between bg-slate-50 rounded-xl px-4 py-2.5 border border-slate-100">
+                  <div className="flex-1 min-w-0">
+                    <p className="font-bold text-slate-800 text-sm truncate">{item.name}</p>
+                    <p className="text-xs text-slate-400">คงเหลือ {item.mainStock ?? 0} {item.unit}</p>
+                  </div>
+                  <div className="flex items-center gap-1.5 ml-2 shrink-0">
+                    <button onClick={() => setCleaningUsageMap(m => ({...m, [item.id]: Math.max(0, (Number(m[item.id])||0) - 1)}))} className="w-7 h-7 rounded-full bg-white border border-slate-200 flex items-center justify-center text-slate-500 hover:bg-slate-100 font-bold text-lg leading-none shadow-sm">−</button>
+                    <input type="number" min="0" className="w-12 text-center font-black text-base bg-white border border-slate-200 rounded-xl p-1 focus:ring-2 focus:ring-purple-400 outline-none"
+                      value={cleaningUsageMap[item.id] || ''} placeholder="0"
+                      onChange={e => setCleaningUsageMap(m => ({...m, [item.id]: e.target.value}))}/>
+                    <span className="text-xs text-slate-400 w-7">{item.unit}</span>
+                    <button onClick={() => setCleaningUsageMap(m => ({...m, [item.id]: (Number(m[item.id])||0) + 1}))} className="w-7 h-7 rounded-full bg-purple-500 text-white flex items-center justify-center font-bold text-lg leading-none shadow-sm hover:bg-purple-600">+</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </Modal>
+
+      {/* ─── Reorder Recommendation Modal ───────────────────────────────────────── */}
+      <Modal isOpen={isReorderModalOpen} onClose={() => setIsReorderModalOpen(false)} title="รายการแนะนำซื้อ">
+        {(() => {
+          const lowItems = [...consumables]
+            .filter(item => {
+              const s = item.mainStock ?? item.stockQty ?? 0;
+              return s <= (item.minStock ?? 0);
+            })
+            .sort((a, b) => {
+              const sA = a.mainStock ?? a.stockQty ?? 0;
+              const sB = b.mainStock ?? b.stockQty ?? 0;
+              if (sA === 0 && sB !== 0) return -1;
+              if (sB === 0 && sA !== 0) return 1;
+              return (a.name||'').localeCompare(b.name||'');
+            });
+          if (lowItems.length === 0) return (
+            <div className="text-center py-10">
+              <div className="text-4xl mb-3">🎉</div>
+              <p className="font-bold text-slate-700">สต๊อกพร้อมใช้งานทุกรายการ</p>
+              <p className="text-sm text-slate-400 mt-1">ไม่มีรายการที่ต้องสั่งซื้อ</p>
+            </div>
+          );
+          return (
+            <div className="space-y-3">
+              <p className="text-xs text-slate-400">{lowItems.length} รายการที่ควรสั่งซื้อ</p>
+              {lowItems.map(item => {
+                const stock = item.mainStock ?? item.stockQty ?? 0;
+                const isOut = stock <= 0;
+                const catObj = consumableCategories.find(c => c.name === item.category);
+                const catColor = catObj?.color || '#64748b';
+                return (
+                  <div key={item.id} className={`rounded-2xl border px-4 py-3 flex items-center justify-between gap-3 ${isOut ? 'bg-red-50 border-red-200' : 'bg-amber-50 border-amber-200'}`}>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-black ${isOut ? 'bg-red-500 text-white' : 'bg-amber-500 text-white'}`}>{isOut ? 'หมด' : 'ใกล้หมด'}</span>
+                        {item.category && <span className="text-[10px] px-2 py-0.5 rounded-full font-bold text-white" style={{backgroundColor: catColor}}>{item.category}</span>}
+                      </div>
+                      <p className="font-bold text-slate-800 mt-1">{item.name}</p>
+                      <p className="text-xs text-slate-500">คงเหลือ <span className={`font-black ${isOut ? 'text-red-600' : 'text-amber-600'}`}>{stock}</span> / ขั้นต่ำ {item.minStock ?? 0} {item.unit}</p>
+                    </div>
+                    <button
+                      onClick={() => {
+                        setIsReorderModalOpen(false);
+                        const newItems = [{consumableId: item.id, qty:'', totalCost:'', note:''}];
+                        setPurchaseSession({ store:'', date: formatDate(new Date()), items: newItems });
+                        setIsPurchaseSessionOpen(true);
+                      }}
+                      className="bg-emerald-600 text-white px-3 py-2 rounded-xl font-bold text-sm hover:bg-emerald-700 active:scale-95 transition-all shrink-0 shadow-sm"
+                    >
+                      สั่งซื้อ
+                    </button>
+                  </div>
+                );
+              })}
+              <button
+                onClick={() => {
+                  setIsReorderModalOpen(false);
+                  const newItems = lowItems.map(item => ({consumableId: item.id, qty:'', totalCost:'', note:''}));
+                  setPurchaseSession({ store:'', date: formatDate(new Date()), items: newItems });
+                  setIsPurchaseSessionOpen(true);
+                }}
+                className="w-full py-3 bg-emerald-600 text-white rounded-2xl font-bold hover:bg-emerald-700 transition-all active:scale-95 shadow-lg shadow-emerald-200"
+              >
+                สั่งซื้อทั้งหมด ({lowItems.length} รายการ)
+              </button>
+            </div>
+          );
+        })()}
       </Modal>
 
       <Modal isOpen={isExpenseModalOpen} onClose={() => setIsExpenseModalOpen(false)} title={expenseModalMode === 'create' ? `บันทึกรายจ่าย` : `แก้ไขรายจ่าย`}>
