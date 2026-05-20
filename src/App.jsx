@@ -460,11 +460,16 @@ export default function App() {
 
   const handleRoomClick = (room, status, booking, source = 'dashboard') => {
       if (role === 'staff') {
+          // Dirty room → open cleaning modal directly
+          if (status === 'available' && room.cleaningStatus === 'dirty') {
+              openCleaningRecord(room.id);
+              return;
+          }
           if (status === 'booked') {
              setSelectedBookedRoom({ room, booking });
              setStaffCheckInForm({
                  totalPrice: 0,
-                 nights: 1, 
+                 nights: 1,
                  paymentMethod: 'เงินสด',
                  isReceiptNeeded: false,
                  keyDepositCollected: false,
@@ -1459,11 +1464,17 @@ export default function App() {
       for (const [cId, qty] of usedEntries) {
         const item = consumables.find(c => c.id === cId);
         if (!item) continue;
-        const newMain = Math.max(0, (item.mainStock ?? item.stockQty ?? 0) - Number(qty));
-        await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'consumables', item.id), { mainStock: newMain });
+        const numQty = Number(qty);
+        const currentRoom = item.roomStock ?? 0;
+        const currentMain = item.mainStock ?? item.stockQty ?? 0;
+        const newRoomStock = Math.max(0, currentRoom - numQty);
+        await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'consumables', item.id), {
+          roomStock: newRoomStock,
+          stockQty: currentMain + newRoomStock,
+        });
         await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'consumableLogs'), {
-          consumableId: item.id, consumableName: item.name, qty: Number(qty),
-          unit: item.unit, logType: 'use', cost: Number(qty) * (item.avgCostPerUnit ?? 0),
+          consumableId: item.id, consumableName: item.name, qty: numQty,
+          unit: item.unit, logType: 'use', cost: numQty * (item.avgCostPerUnit ?? 0),
           date: today, roomId: cleaningTargetRoomId,
           note: 'ทำความสะอาดห้อง', createdAt: Timestamp.now(),
         });
@@ -1498,8 +1509,8 @@ export default function App() {
         const numQty = Number(qty);
         return [
           updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'consumables', cId), {
-            mainStock: Math.max(0, (item.mainStock ?? item.stockQty ?? 0) - numQty),
-            stockQty: Math.max(0, (item.stockQty||0) - numQty),
+            roomStock: Math.max(0, (item.roomStock ?? 0) - numQty),
+            stockQty: Math.max(0, (item.mainStock ?? item.stockQty ?? 0)) + Math.max(0, (item.roomStock ?? 0) - numQty),
           }),
           addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'consumableLogs'), {
             consumableId: cId, consumableName: item.name, qty: numQty, unit: item.unit,
@@ -3677,7 +3688,7 @@ export default function App() {
                   <div key={item.id} className="flex items-center justify-between bg-slate-50 rounded-xl px-4 py-3 border border-slate-100">
                     <div className="flex-1 min-w-0">
                       <p className="font-bold text-slate-800 text-sm truncate">{item.name}</p>
-                      <p className="text-xs text-slate-400">คงเหลือ {(item.mainStock ?? item.stockQty ?? 0)} {item.unit}{role !== 'staff' && ` · ${(item.avgCostPerUnit ?? item.costPerUnit ?? 0).toLocaleString(undefined,{maximumFractionDigits:2})} ฿/${item.unit}`}</p>
+                      <p className="text-xs text-slate-400">{role === 'staff' ? `คลังห้อง: ${item.roomStock ?? 0}` : `คงเหลือ ${(item.mainStock ?? item.stockQty ?? 0)}`} {item.unit}{role !== 'staff' && ` · ${(item.avgCostPerUnit ?? item.costPerUnit ?? 0).toLocaleString(undefined,{maximumFractionDigits:2})} ฿/${item.unit}`}</p>
                     </div>
                     <div className="flex items-center gap-2 ml-3 flex-shrink-0">
                       <button onClick={() => setConsumableUsageMap(m => ({...m, [item.id]: Math.max(0, (Number(m[item.id])||0) - 1)}))} className="w-7 h-7 rounded-full bg-white border border-slate-200 flex items-center justify-center text-slate-500 hover:bg-slate-100 font-bold text-lg leading-none shadow-sm">−</button>
@@ -3782,7 +3793,7 @@ export default function App() {
                 <div key={item.id} className="flex items-center justify-between bg-slate-50 rounded-xl px-4 py-2.5 border border-slate-100">
                   <div className="flex-1 min-w-0">
                     <p className="font-bold text-slate-800 text-sm truncate">{item.name}</p>
-                    <p className="text-xs text-slate-400">คงเหลือ {item.mainStock ?? 0} {item.unit}</p>
+                    <p className="text-xs text-slate-400">คลังห้อง: {item.roomStock ?? 0} {item.unit}</p>
                   </div>
                   <div className="flex items-center gap-1.5 ml-2 shrink-0">
                     <button onClick={() => setCleaningUsageMap(m => ({...m, [item.id]: Math.max(0, (Number(m[item.id])||0) - 1)}))} className="w-7 h-7 rounded-full bg-white border border-slate-200 flex items-center justify-center text-slate-500 hover:bg-slate-100 font-bold text-lg leading-none shadow-sm">−</button>
