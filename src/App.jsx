@@ -32,7 +32,7 @@ if (!document.getElementById('custom-font-style')) {
   fontStyle.id = 'custom-font-style';
   fontStyle.innerHTML = `
     @import url('https://fonts.googleapis.com/css2?family=Prompt:ital,wght@0,100;0,200;0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,100;1,200;1,300;1,400;1,500;1,600;1,700;1,800;1,900&display=swap');
-    body { font-family: 'Prompt', sans-serif; background-color: #f1f5f9; }
+    body { font-family: 'Prompt', sans-serif; background-color: #f1f5f9; overflow-x: hidden; max-width: 100vw; }
     
     @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
     .animate-fade-in { animation: fadeIn 0.3s ease-out forwards; }
@@ -1754,19 +1754,19 @@ export default function App() {
   const currentBookingStatus = bookings.find(b => b.id === formData.id)?.status;
 
   return (
-    <div className="min-h-screen bg-slate-100 text-slate-800 pb-28 md:pb-20 font-sans">
+    <div className="min-h-screen w-full overflow-x-hidden bg-slate-100 text-slate-800 pb-28 md:pb-20 font-sans">
       {notification && <div className={`fixed top-6 right-6 px-6 py-4 rounded-2xl shadow-xl z-[70] text-white font-medium flex items-center gap-2 animate-fade-in ${notification.type === 'error' ? 'bg-red-500' : 'bg-emerald-600'}`}>{notification.type === 'error' ? <AlertCircle size={20}/> : <CheckCircle size={20}/>} {notification.message}</div>}
       <ConfirmModal dialog={confirmDialog} onClose={() => setConfirmDialog(null)} />
 
-      <header className="bg-white/95 backdrop-blur-md text-emerald-900 shadow-sm sticky top-0 z-40 border-b border-white">
-        <div className="container mx-auto px-4 md:px-6 py-3 flex justify-between items-center relative">
-          <div className="flex items-center gap-3">
-              <div className="bg-gradient-to-tr from-emerald-500 to-teal-400 text-white p-2 rounded-xl font-bold shadow-md shadow-emerald-200">CR</div>
-              <div>
-                  <h1 className="text-xl font-extrabold tracking-tight">Chanpha Resort</h1>
+      <header className="bg-white/95 backdrop-blur-md text-emerald-900 shadow-sm sticky top-0 z-40 border-b border-white overflow-x-hidden">
+        <div className="w-full max-w-full px-3 md:px-6 py-3 flex justify-between items-center relative gap-2">
+          <div className="flex items-center gap-2 flex-shrink-0">
+              <div className="bg-gradient-to-tr from-emerald-500 to-teal-400 text-white p-2 rounded-xl font-bold shadow-md shadow-emerald-200 text-sm flex-shrink-0">CR</div>
+              <div className="min-w-0">
+                  <h1 className="text-base md:text-xl font-extrabold tracking-tight leading-tight">Chanpha Resort</h1>
                   <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider flex items-center gap-1">
                       {role === 'owner' ? 'Owner Mode' : 'Staff Mode'}
-                      {useMockData && <span className="bg-red-100 text-red-600 px-1.5 py-0.5 rounded ml-1 animate-pulse">DEMO MODE</span>}
+                      {useMockData && <span className="bg-red-100 text-red-600 px-1.5 py-0.5 rounded ml-1 animate-pulse">DEMO</span>}
                   </span>
               </div>
           </div>
@@ -1813,17 +1813,17 @@ export default function App() {
               <button onClick={() => setRole(null)} className="p-3 bg-red-50 text-red-500 rounded-xl hover:bg-red-100 hover:text-red-600 transition-colors shadow-sm"><LogOut size={18}/></button>
           </div>
 
-          <div className="flex md:hidden items-center gap-2">
+          <div className="flex md:hidden items-center gap-1.5 min-w-0">
               {role === 'staff' && selectedStaffRooms.length > 0 && (
-                  <div className="flex items-center gap-1 bg-emerald-50 border border-emerald-200 p-1 rounded-xl animate-fade-in shadow-sm">
-                      <span className="font-black text-emerald-700 px-2 text-sm">{selectedStaffRooms.length}</span>
-                      <button onClick={() => handleStaffBulkAction('checkin')} className="bg-emerald-600 text-white px-2.5 py-1.5 rounded-lg font-bold shadow-md hover:bg-emerald-700 active:scale-95 transition-all flex items-center text-xs gap-1"><LogIn size={14}/> เข้า</button>
-                      <button onClick={() => { if(selectedStaffRooms.length === 1){ const r = rooms.find(x => x.id === selectedStaffRooms[0]); if(r){ openTempModal(r); setSelectedStaffRooms([]); } } else showNotification('เลือก 1 ห้อง', 'error'); }} className="bg-amber-500 text-white px-2.5 py-1.5 rounded-lg font-bold hover:bg-amber-600 active:scale-95 transition-all flex items-center text-xs gap-1"><Clock size={14}/> ชม.</button>
-                      <button onClick={() => handleStaffBulkAction('checkout')} className="bg-white border border-red-200 text-red-600 px-2.5 py-1.5 rounded-lg font-bold hover:bg-red-50 active:scale-95 transition-all flex items-center text-xs gap-1"><LogOut size={14}/> ออก</button>
-                      <button onClick={() => setSelectedStaffRooms([])} className="p-1 text-slate-400 hover:text-slate-600 bg-white rounded-full shadow-sm"><X size={14}/></button>
+                  <div className="flex items-center gap-1 bg-emerald-50 border border-emerald-200 px-1.5 py-1 rounded-xl animate-fade-in shadow-sm">
+                      <span className="font-black text-emerald-700 px-1 text-xs">{selectedStaffRooms.length}</span>
+                      <button onClick={() => handleStaffBulkAction('checkin')} className="bg-emerald-600 text-white w-9 h-8 rounded-lg font-bold shadow-md hover:bg-emerald-700 active:scale-95 transition-all flex items-center justify-center"><LogIn size={15}/></button>
+                      <button onClick={() => { if(selectedStaffRooms.length === 1){ const r = rooms.find(x => x.id === selectedStaffRooms[0]); if(r){ openTempModal(r); setSelectedStaffRooms([]); } } else showNotification('เลือก 1 ห้อง', 'error'); }} className="bg-amber-500 text-white w-9 h-8 rounded-lg font-bold hover:bg-amber-600 active:scale-95 transition-all flex items-center justify-center"><Clock size={15}/></button>
+                      <button onClick={() => handleStaffBulkAction('checkout')} className="bg-white border border-red-200 text-red-500 w-9 h-8 rounded-lg font-bold hover:bg-red-50 active:scale-95 transition-all flex items-center justify-center"><LogOut size={15}/></button>
+                      <button onClick={() => setSelectedStaffRooms([])} className="w-7 h-7 text-slate-400 hover:text-slate-600 bg-white rounded-full shadow-sm flex items-center justify-center"><X size={14}/></button>
                   </div>
               )}
-              <button onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)} className="p-2.5 bg-white border border-slate-200 rounded-xl text-slate-600 hover:text-emerald-600 shadow-sm active:scale-95 transition-all">
+              <button onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)} className="p-2.5 bg-white border border-slate-200 rounded-xl text-slate-600 hover:text-emerald-600 shadow-sm active:scale-95 transition-all flex-shrink-0">
                 {isMobileMenuOpen ? <X size={22}/> : <Menu size={22}/>}
               </button>
           </div>
