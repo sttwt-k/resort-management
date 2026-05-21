@@ -1758,7 +1758,7 @@ export default function App() {
       {notification && <div className={`fixed top-6 right-6 px-6 py-4 rounded-2xl shadow-xl z-[70] text-white font-medium flex items-center gap-2 animate-fade-in ${notification.type === 'error' ? 'bg-red-500' : 'bg-emerald-600'}`}>{notification.type === 'error' ? <AlertCircle size={20}/> : <CheckCircle size={20}/>} {notification.message}</div>}
       <ConfirmModal dialog={confirmDialog} onClose={() => setConfirmDialog(null)} />
 
-      <header className="bg-white/95 backdrop-blur-md text-emerald-900 shadow-sm sticky top-0 z-40 border-b border-white overflow-x-hidden">
+      <header className="bg-white/95 backdrop-blur-md text-emerald-900 shadow-sm sticky top-0 z-40 border-b border-white">
         <div className="w-full max-w-full px-3 md:px-6 py-3 flex justify-between items-center relative gap-2">
           <div className="flex items-center gap-2 flex-shrink-0">
               <div className="bg-gradient-to-tr from-emerald-500 to-teal-400 text-white p-2 rounded-xl font-bold shadow-md shadow-emerald-200 text-sm flex-shrink-0">CR</div>
