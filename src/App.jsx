@@ -117,6 +117,9 @@ export default function App() {
   const [reportSelectedDay, setReportSelectedDay] = useState(null); 
   const [isReportDetailOpen, setIsReportDetailOpen] = useState(false); 
   const [reportViewMode, setReportViewMode] = useState('weekly');
+  const [reportWeekStatsOpen, setReportWeekStatsOpen] = useState(false);
+  const [reportHistoryOpen, setReportHistoryOpen] = useState(false);
+  const [reportPieOpen, setReportPieOpen] = useState(false);
   const [selectedReportWeek, setSelectedReportWeek] = useState(0);
   const [reportDayPopup, setReportDayPopup] = useState(null);
 
@@ -176,7 +179,7 @@ export default function App() {
   const [consumableLogs, setConsumableLogs] = useState([]);
   const [consumableCategories, setConsumableCategories] = useState([]);
   const [isConsumableItemModalOpen, setIsConsumableItemModalOpen] = useState(false);
-  const [consumableItemForm, setConsumableItemForm] = useState({id:'', name:'', unit:'ชิ้น', packUnit:'', unitsPerPack:0, minStock:5, category:''});
+  const [consumableItemForm, setConsumableItemForm] = useState({id:'', name:'', unit:'ชิ้น', packUnit:'', unitsPerPack:0, minStock:5, category:'', avgCostPerUnit:''});
   const [consumableItemFormMode, setConsumableItemFormMode] = useState('create');
   const [isRestockModalOpen, setIsRestockModalOpen] = useState(false);
   const [restockTarget, setRestockTarget] = useState(null);
@@ -203,6 +206,8 @@ export default function App() {
   const [consumableUsageMap, setConsumableUsageMap] = useState({});
   const [stockSubTab, setStockSubTab] = useState('items');
   const [isReorderModalOpen, setIsReorderModalOpen] = useState(false);
+  const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+  const [exportOptions, setExportOptions] = useState({ income: true, expense: true, consumable: true });
   // Housekeeping
   const [isHousekeepingViewOpen, setIsHousekeepingViewOpen] = useState(false);
   const [isCleaningRecordOpen, setIsCleaningRecordOpen] = useState(false);
@@ -1147,7 +1152,7 @@ export default function App() {
   // ── Consumable Handlers ──────────────────────────────────────────────────────
   const openConsumableItemModal = (item = null) => {
     if (item) {
-      setConsumableItemForm({id: item.id, name: item.name, unit: item.unit, packUnit: item.packUnit||'', unitsPerPack: item.unitsPerPack||0, minStock: item.minStock||5, category: item.category||''});
+      setConsumableItemForm({id: item.id, name: item.name, unit: item.unit, packUnit: item.packUnit||'', unitsPerPack: item.unitsPerPack||0, minStock: item.minStock||5, category: item.category||'', avgCostPerUnit: item.avgCostPerUnit ?? item.costPerUnit ?? ''});
       setConsumableItemFormMode('edit');
     } else {
       setConsumableItemForm({id:'', name:'', unit:'ชิ้น', packUnit:'', unitsPerPack:0, minStock:5, category: consumableCategories[0]?.name||''});
@@ -1164,6 +1169,7 @@ export default function App() {
       unitsPerPack: Number(consumableItemForm.unitsPerPack)||0,
       minStock: Number(consumableItemForm.minStock)||0,
       category: consumableItemForm.category||'',
+      ...(consumableItemFormMode === 'edit' && consumableItemForm.avgCostPerUnit !== '' && { avgCostPerUnit: Number(consumableItemForm.avgCostPerUnit)||0 }),
     };
     try {
       if (consumableItemFormMode === 'create') {
@@ -1737,6 +1743,23 @@ export default function App() {
       };
     }).sort((a, b) => b.rate - a.rate);
   }, [rooms, bookings, reportMonth]);
+
+  // Consumable cost per room for selected month
+  const reportConsumableCostByRoom = useMemo(() => {
+    const useLogs = consumableLogs.filter(l => l.logType === 'use' && l.date?.startsWith(reportMonth));
+    const byRoom = {};
+    let total = 0;
+    useLogs.forEach(l => {
+      const cost = l.cost || 0;
+      total += cost;
+      if (l.roomId) {
+        if (!byRoom[l.roomId]) byRoom[l.roomId] = { roomName: l.roomName || l.roomId, cost: 0 };
+        byRoom[l.roomId].cost += cost;
+      }
+    });
+    const rows = Object.values(byRoom).sort((a,b) => b.cost - a.cost);
+    return { total: Math.round(total), rows };
+  }, [consumableLogs, reportMonth]);
 
   if (loading) return <div className="h-screen flex items-center justify-center text-emerald-600 font-bold bg-slate-100 animate-pulse">กำลังโหลดข้อมูล...</div>;
   if (!role) return <LoginScreen onLogin={setRole} />;
@@ -2350,7 +2373,7 @@ export default function App() {
                       <tr>
                         <th className="px-4 py-4">วันที่</th>
                         <th className="px-4 py-4">รายการ</th>
-                        <th className="px-4 py-4">ประเภท</th>
+                        <th className="px-4 py-4">ประเภท / ห้อง</th>
                         <th className="px-4 py-4 text-center">จำนวน</th>
                         <th className="px-4 py-4 text-right">มูลค่า</th>
                         <th className="px-4 py-4"/>
@@ -2370,7 +2393,12 @@ export default function App() {
                           <tr key={log.id} className="hover:bg-slate-50/50 transition-colors">
                             <td className="px-4 py-3 text-xs text-slate-500">{formatThaiDate(log.date,'short')}</td>
                             <td className="px-4 py-3 font-medium text-slate-800">{log.consumableName}{log.note ? <span className="block text-[10px] text-slate-400">{log.note}</span> : null}</td>
-                            <td className="px-4 py-3"><span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${t.cls}`}>{t.label}</span></td>
+                            <td className="px-4 py-3">
+                              <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${t.cls}`}>{t.label}</span>
+                              {log.logType === 'use' && (log.roomName || log.roomId) && (
+                                <span className="block text-[10px] text-slate-400 mt-0.5">🏠 {log.roomName || log.roomId}</span>
+                              )}
+                            </td>
                             <td className="px-4 py-3 text-center font-bold">{t.sign}{log.qty} {log.unit}</td>
                             <td className="px-4 py-3 text-right font-medium">{log.cost > 0 ? `${(log.cost||0).toLocaleString()} ฿` : '—'}</td>
                             <td className="px-4 py-3"><button onClick={() => openEditLog(log)} className="p-1.5 text-slate-300 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"><Edit size={13}/></button></td>
@@ -2398,46 +2426,43 @@ export default function App() {
                           <h2 className="text-2xl font-black text-slate-800 flex items-center gap-3"><BarChart2 className="text-emerald-500"/> ผลประกอบการ</h2>
                           <input type="month" value={reportMonth} onChange={(e) => { setReportMonth(e.target.value); setSelectedReportWeek(0); setReportDayPopup(null); }} className="border border-slate-200 rounded-lg px-3 py-2 text-slate-600 focus:ring-2 focus:ring-emerald-500 outline-none bg-slate-50" />
                       </div>
-                      <div className="flex gap-2">
-                          <button onClick={() => exportToCSV(reportData.reportBookings, `Income_${reportMonth}`)} className="flex items-center gap-2 text-xs font-bold bg-emerald-50 text-emerald-700 px-4 py-2 rounded-lg hover:bg-emerald-100 transition-colors"><Download size={14}/> รายรับ CSV</button>
-                          <button onClick={() => exportToCSV(reportData.reportExpenses, `Expense_${reportMonth}`)} className="flex items-center gap-2 text-xs font-bold bg-red-50 text-red-700 px-4 py-2 rounded-lg hover:bg-red-100 transition-colors"><Download size={14}/> รายจ่าย CSV</button>
-                      </div>
+                      <button onClick={() => setIsExportModalOpen(true)} className="flex items-center gap-2 text-xs font-bold bg-slate-100 text-slate-700 px-4 py-2.5 rounded-xl hover:bg-slate-200 transition-colors border border-slate-200">
+                        <Download size={14}/> Export
+                      </button>
                   </div>
 
-                  {/* 3 Stat Cards — always visible */}
-                  <div className="grid grid-cols-3 gap-3 mb-6">
+                  {/* 4 Stat Cards */}
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
                       <div className="bg-emerald-50/50 p-3 md:p-5 rounded-2xl border border-emerald-100">
                           <p className="text-slate-500 text-[10px] md:text-xs font-bold uppercase tracking-wider mb-1">รายได้</p>
                           <p className="text-lg md:text-2xl font-black text-emerald-600">฿{Math.round(reportData.monthlyRevenue).toLocaleString()}</p>
                           <div className="flex flex-col gap-0.5 mt-2 pt-2 border-t border-emerald-200/50">
-                              <span className="text-[10px] md:text-xs font-bold text-emerald-700 flex items-center gap-1"><Banknote size={11}/> สด: {Math.round(reportData.monthlyCash).toLocaleString()}</span>
-                              <span className="text-[10px] md:text-xs font-bold text-emerald-700 flex items-center gap-1"><QrCode size={11}/> โอน: {Math.round(reportData.monthlyTransfer).toLocaleString()}</span>
+                              <span className="text-[10px] font-bold text-emerald-700 flex items-center gap-1"><Banknote size={10}/> สด: {Math.round(reportData.monthlyCash).toLocaleString()}</span>
+                              <span className="text-[10px] font-bold text-emerald-700 flex items-center gap-1"><QrCode size={10}/> โอน: {Math.round(reportData.monthlyTransfer).toLocaleString()}</span>
                           </div>
                       </div>
                       <div className="bg-red-50/50 p-3 md:p-5 rounded-2xl border border-red-100">
                           <p className="text-slate-500 text-[10px] md:text-xs font-bold uppercase tracking-wider mb-1">รายจ่าย</p>
                           <p className="text-lg md:text-2xl font-black text-red-600">฿{reportData.monthlyExpense.toLocaleString()}</p>
                       </div>
+                      <div className="bg-orange-50/50 p-3 md:p-5 rounded-2xl border border-orange-100">
+                          <p className="text-slate-500 text-[10px] md:text-xs font-bold uppercase tracking-wider mb-1">ต้นทุนของใช้</p>
+                          <p className="text-lg md:text-2xl font-black text-orange-600">฿{reportConsumableCostByRoom.total.toLocaleString()}</p>
+                          <p className="text-[10px] text-orange-500 mt-1">{consumableLogs.filter(l=>l.logType==='use'&&l.date?.startsWith(reportMonth)).length} รายการ</p>
+                      </div>
                       <div className={`p-3 md:p-5 rounded-2xl border ${reportData.netProfit >= 0 ? 'bg-blue-50/50 border-blue-100' : 'bg-orange-50/50 border-orange-100'}`}>
-                          <p className="text-slate-500 text-[10px] md:text-xs font-bold uppercase tracking-wider mb-1">กำไร</p>
-                          <p className={`text-lg md:text-2xl font-black ${reportData.netProfit >= 0 ? 'text-blue-600' : 'text-orange-600'}`}>฿{Math.round(reportData.netProfit).toLocaleString()}</p>
+                          <p className="text-slate-500 text-[10px] md:text-xs font-bold uppercase tracking-wider mb-1">กำไรสุทธิ</p>
+                          <p className={`text-lg md:text-2xl font-black ${reportData.netProfit >= 0 ? 'text-blue-600' : 'text-orange-600'}`}>฿{Math.round(reportData.netProfit - reportConsumableCostByRoom.total).toLocaleString()}</p>
+                          <p className="text-[10px] text-slate-400 mt-1">หักต้นทุนของใช้แล้ว</p>
                       </div>
                   </div>
 
                   {/* Tab Switcher */}
-                  <div className="flex gap-2 mb-5 bg-slate-100 p-1 rounded-2xl w-fit">
-                      <button
-                          onClick={() => { setReportViewMode('weekly'); setReportDayPopup(null); }}
-                          className={`px-5 py-2.5 rounded-xl font-bold text-sm transition-all ${reportViewMode === 'weekly' ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
-                      >รายสัปดาห์</button>
-                      <button
-                          onClick={() => { setReportViewMode('monthly'); setReportDayPopup(null); }}
-                          className={`px-5 py-2.5 rounded-xl font-bold text-sm transition-all ${reportViewMode === 'monthly' ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
-                      >รายเดือน</button>
-                      <button
-                          onClick={() => { setReportViewMode('occupancy'); setReportDayPopup(null); }}
-                          className={`px-5 py-2.5 rounded-xl font-bold text-sm transition-all ${reportViewMode === 'occupancy' ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
-                      >อัตราเข้าพัก</button>
+                  <div className="flex gap-1.5 mb-5 bg-slate-100 p-1 rounded-2xl w-fit overflow-x-auto">
+                      <button onClick={() => { setReportViewMode('weekly'); setReportDayPopup(null); }} className={`px-4 py-2 rounded-xl font-bold text-sm transition-all whitespace-nowrap ${reportViewMode === 'weekly' ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}>รายสัปดาห์</button>
+                      <button onClick={() => { setReportViewMode('monthly'); setReportDayPopup(null); }} className={`px-4 py-2 rounded-xl font-bold text-sm transition-all whitespace-nowrap ${reportViewMode === 'monthly' ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}>รายเดือน</button>
+                      <button onClick={() => { setReportViewMode('occupancy'); setReportDayPopup(null); }} className={`px-4 py-2 rounded-xl font-bold text-sm transition-all whitespace-nowrap ${reportViewMode === 'occupancy' ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}>อัตราเข้าพัก</button>
+                      <button onClick={() => { setReportViewMode('costs'); setReportDayPopup(null); }} className={`px-4 py-2 rounded-xl font-bold text-sm transition-all whitespace-nowrap ${reportViewMode === 'costs' ? 'bg-white text-orange-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}>ต้นทุนของใช้</button>
                   </div>
 
                   {/* ===== WEEKLY TAB ===== */}
@@ -2514,7 +2539,7 @@ export default function App() {
                               </div>
                           )}
 
-                          {/* Week Summary Cards */}
+                          {/* Week Summary Cards — collapsible */}
                           {(() => {
                               const wkData = weeklyBreakdown[selectedReportWeek] || [];
                               const wkTotal = wkData.reduce((s,d) => s + (d.revenue||0), 0);
@@ -2522,23 +2547,34 @@ export default function App() {
                               const wkCash = wkData.reduce((s,d) => s + (d.cash||0), 0);
                               const wkTransfer = wkData.reduce((s,d) => s + (d.transfer||0), 0);
                               return (
-                                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                                      <div className="bg-slate-50 rounded-2xl p-4">
-                                          <div className="text-xs text-slate-400 mb-1">รวมสัปดาห์ {selectedReportWeek+1}</div>
-                                          <div className="text-xl font-black text-slate-800">฿{Math.round(wkTotal).toLocaleString()}</div>
-                                      </div>
-                                      <div className="bg-slate-50 rounded-2xl p-4">
-                                          <div className="text-xs text-slate-400 mb-1">เฉลี่ย/วัน</div>
-                                          <div className="text-xl font-black text-slate-800">฿{Math.round(wkTotal/wkDays).toLocaleString()}</div>
-                                      </div>
-                                      <div className="bg-blue-50 rounded-2xl p-4">
-                                          <div className="text-xs text-blue-400 mb-1">เงินสด</div>
-                                          <div className="text-xl font-black text-blue-700">฿{Math.round(wkCash).toLocaleString()}</div>
-                                      </div>
-                                      <div className="bg-teal-50 rounded-2xl p-4">
-                                          <div className="text-xs text-teal-400 mb-1">เงินโอน</div>
-                                          <div className="text-xl font-black text-teal-700">฿{Math.round(wkTransfer).toLocaleString()}</div>
-                                      </div>
+                                  <div className="border border-slate-200 rounded-2xl overflow-hidden">
+                                      <button
+                                          onClick={() => setReportWeekStatsOpen(o => !o)}
+                                          className="w-full flex items-center justify-between px-4 py-3 bg-slate-50 hover:bg-slate-100 transition-colors text-sm font-bold text-slate-600"
+                                      >
+                                          <span>สรุปสัปดาห์ {selectedReportWeek+1} · ฿{Math.round(wkTotal).toLocaleString()}</span>
+                                          <ChevronRight size={16} className={`transition-transform ${reportWeekStatsOpen ? 'rotate-90' : ''}`}/>
+                                      </button>
+                                      {reportWeekStatsOpen && (
+                                          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 p-4 bg-white animate-fade-in">
+                                              <div className="bg-slate-50 rounded-2xl p-4">
+                                                  <div className="text-xs text-slate-400 mb-1">รวมสัปดาห์</div>
+                                                  <div className="text-xl font-black text-slate-800">฿{Math.round(wkTotal).toLocaleString()}</div>
+                                              </div>
+                                              <div className="bg-slate-50 rounded-2xl p-4">
+                                                  <div className="text-xs text-slate-400 mb-1">เฉลี่ย/วัน</div>
+                                                  <div className="text-xl font-black text-slate-800">฿{Math.round(wkTotal/wkDays).toLocaleString()}</div>
+                                              </div>
+                                              <div className="bg-blue-50 rounded-2xl p-4">
+                                                  <div className="text-xs text-blue-400 mb-1">เงินสด</div>
+                                                  <div className="text-xl font-black text-blue-700">฿{Math.round(wkCash).toLocaleString()}</div>
+                                              </div>
+                                              <div className="bg-teal-50 rounded-2xl p-4">
+                                                  <div className="text-xs text-teal-400 mb-1">เงินโอน</div>
+                                                  <div className="text-xl font-black text-teal-700">฿{Math.round(wkTransfer).toLocaleString()}</div>
+                                              </div>
+                                          </div>
+                                      )}
                                   </div>
                               );
                           })()}
@@ -2547,109 +2583,11 @@ export default function App() {
 
                   {/* ===== MONTHLY TAB ===== */}
                   {reportViewMode === 'monthly' && (
-                      <div className="space-y-6 animate-fade-in">
+                      <div className="space-y-4 animate-fade-in">
 
-                          {/* Income vs Expense 6-month */}
-                          <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm">
-                              <div className="flex items-center justify-between mb-3">
-                                  <h3 className="text-sm font-bold text-slate-600">รายได้ vs รายจ่าย (6 เดือน)</h3>
-                                  <div className="flex gap-3">
-                                      <span className="flex items-center gap-1 text-xs text-slate-500"><span className="w-2.5 h-2.5 rounded-sm bg-blue-200 inline-block"></span>รายได้</span>
-                                      <span className="flex items-center gap-1 text-xs text-slate-500"><span className="w-2.5 h-2.5 rounded-sm bg-red-200 inline-block"></span>รายจ่าย</span>
-                                  </div>
-                              </div>
-                              <ResponsiveContainer width="100%" height={200}>
-                                  <BarChart data={monthHistorySummary} barGap={4}>
-                                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9"/>
-                                      <XAxis dataKey="shortLabel" tick={{fontSize:11, fill:'#94a3b8'}} axisLine={false} tickLine={false} interval={0}/>
-                                      <YAxis hide/>
-                                      <Tooltip formatter={(v) => `฿${Math.round(v).toLocaleString()}`} contentStyle={{borderRadius:'12px',border:'none',boxShadow:'0 10px 15px -3px rgb(0 0 0/0.1)'}}/>
-                                      <Bar dataKey="income" fill="#B5D4F4" radius={[4,4,0,0]} name="รายได้"/>
-                                      <Bar dataKey="expense" fill="#F7C1C1" radius={[4,4,0,0]} name="รายจ่าย"/>
-                                  </BarChart>
-                              </ResponsiveContainer>
-                          </div>
-
-                          {/* YoY Comparison */}
-                          <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm">
-                              <div className="flex items-center justify-between mb-3">
-                                  <h3 className="text-sm font-bold text-slate-600">เทียบปีก่อน (รายได้)</h3>
-                                  <div className="flex gap-3">
-                                      <span className="flex items-center gap-1 text-xs text-slate-500"><span className="w-2.5 h-2.5 rounded-sm bg-teal-300 inline-block"></span>ปีนี้</span>
-                                      <span className="flex items-center gap-1 text-xs text-slate-500"><span className="w-2.5 h-2.5 rounded-sm bg-slate-300 inline-block"></span>ปีก่อน</span>
-                                  </div>
-                              </div>
-                              <ResponsiveContainer width="100%" height={200}>
-                                  <BarChart data={monthHistorySummary} barGap={4}>
-                                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9"/>
-                                      <XAxis dataKey="shortLabel" tick={{fontSize:11, fill:'#94a3b8'}} axisLine={false} tickLine={false} interval={0}/>
-                                      <YAxis hide/>
-                                      <Tooltip formatter={(v) => `฿${Math.round(v).toLocaleString()}`} contentStyle={{borderRadius:'12px',border:'none',boxShadow:'0 10px 15px -3px rgb(0 0 0/0.1)'}}/>
-                                      <Bar dataKey="income" fill="#5DCAA5" radius={[4,4,0,0]} name="ปีนี้"/>
-                                      <Bar dataKey="prevIncome" fill="#D3D1C7" radius={[4,4,0,0]} name="ปีก่อน"/>
-                                  </BarChart>
-                              </ResponsiveContainer>
-                          </div>
-
-                          {/* 6-Month Summary Table */}
-                          <div className="bg-white border border-slate-100 rounded-2xl overflow-hidden shadow-sm">
-                              <div className="px-4 py-3 border-b border-slate-100">
-                                  <h3 className="text-sm font-bold text-slate-600">สรุป 6 เดือนล่าสุด</h3>
-                              </div>
-                              <div className="overflow-x-auto">
-                                  <table className="w-full text-sm" style={{tableLayout:'fixed'}}>
-                                      <thead>
-                                          <tr className="bg-slate-50">
-                                              <th className="text-left px-4 py-2.5 text-xs text-slate-400 font-bold w-24">เดือน</th>
-                                              <th className="text-right px-4 py-2.5 text-xs text-slate-400 font-bold">รายได้</th>
-                                              <th className="text-right px-4 py-2.5 text-xs text-slate-400 font-bold">รายจ่าย</th>
-                                              <th className="text-right px-4 py-2.5 text-xs text-slate-400 font-bold w-20">กำไร%</th>
-                                          </tr>
-                                      </thead>
-                                      <tbody>
-                                          {monthHistorySummary.map((row, idx) => {
-                                              const profitPct = row.income > 0 ? Math.round((row.profit / row.income) * 100) : 0;
-                                              const isCurrent = row.monthKey === reportMonth;
-                                              return (
-                                                  <tr key={idx} className={`border-t border-slate-50 ${isCurrent ? 'bg-emerald-50/60' : 'hover:bg-slate-50/50'}`}>
-                                                      <td className="px-4 py-3 font-bold text-slate-700">
-                                                          <div className="flex items-center gap-1.5 flex-wrap">
-                                                              {row.label}
-                                                              {isCurrent && <span className="text-[9px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded font-bold">ปัจจุบัน</span>}
-                                                          </div>
-                                                      </td>
-                                                      <td className="px-4 py-3 text-right font-bold text-blue-600">฿{row.income.toLocaleString()}</td>
-                                                      <td className="px-4 py-3 text-right text-red-500">฿{row.expense.toLocaleString()}</td>
-                                                      <td className="px-4 py-3 text-right">
-                                                          <span className={`text-xs font-bold px-2 py-1 rounded-lg ${row.profit >= 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600'}`}>
-                                                              {row.profit >= 0 ? '+' : ''}{profitPct}%
-                                                          </span>
-                                                      </td>
-                                                  </tr>
-                                              );
-                                          })}
-                                      </tbody>
-                                  </table>
-                              </div>
-                          </div>
-
-                          {/* Expense Pie */}
-                          <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm h-72">
-                              <h3 className="text-sm font-bold text-slate-500 mb-3 text-center">สัดส่วนค่าใช้จ่าย</h3>
-                              <ResponsiveContainer width="100%" height="90%">
-                                  <PieChart>
-                                      <Pie data={reportData.expensePieData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={55} outerRadius={75} paddingAngle={5} label={({percent}) => `${(percent * 100).toFixed(0)}%`}>
-                                          {reportData.expensePieData.map((entry, index) => <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} stroke="none"/>)}
-                                      </Pie>
-                                      <Tooltip formatter={(v) => `฿${v.toLocaleString()}`} contentStyle={{borderRadius:'12px',border:'none',boxShadow:'0 10px 15px -3px rgb(0 0 0/0.1)'}}/>
-                                      <Legend wrapperStyle={{fontSize:'11px',color:'#64748b'}} iconType="circle"/>
-                                  </PieChart>
-                              </ResponsiveContainer>
-                          </div>
-
-                          {/* Room Revenue Bar */}
+                          {/* Room Revenue Bar — always visible (most useful) */}
                           <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm" style={{height: Math.max(reportData.roomPieData.length * 44 + 80, 220)}}>
-                              <h3 className="text-sm font-bold text-slate-500 mb-3 text-center">ยอดขายตามห้องพัก</h3>
+                              <h3 className="text-sm font-bold text-slate-600 mb-3">ยอดขายตามห้องพัก</h3>
                               <ResponsiveContainer width="100%" height="88%">
                                   <BarChart data={reportData.roomPieData} layout="vertical" margin={{top:5, right:30, left:40, bottom:5}}>
                                       <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f1f5f9"/>
@@ -2661,6 +2599,121 @@ export default function App() {
                                       </Bar>
                                   </BarChart>
                               </ResponsiveContainer>
+                          </div>
+
+                          {/* Expense Pie — collapsible */}
+                          <div className="border border-slate-200 rounded-2xl overflow-hidden">
+                              <button
+                                  onClick={() => setReportPieOpen(o => !o)}
+                                  className="w-full flex items-center justify-between px-4 py-3 bg-slate-50 hover:bg-slate-100 transition-colors text-sm font-bold text-slate-600"
+                              >
+                                  <span>สัดส่วนค่าใช้จ่าย</span>
+                                  <ChevronRight size={16} className={`transition-transform ${reportPieOpen ? 'rotate-90' : ''}`}/>
+                              </button>
+                              {reportPieOpen && (
+                                  <div className="bg-white p-4 animate-fade-in" style={{height:280}}>
+                                      <ResponsiveContainer width="100%" height="100%">
+                                          <PieChart>
+                                              <Pie data={reportData.expensePieData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={55} outerRadius={75} paddingAngle={5} label={({percent}) => `${(percent * 100).toFixed(0)}%`}>
+                                                  {reportData.expensePieData.map((entry, index) => <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} stroke="none"/>)}
+                                              </Pie>
+                                              <Tooltip formatter={(v) => `฿${v.toLocaleString()}`} contentStyle={{borderRadius:'12px',border:'none',boxShadow:'0 10px 15px -3px rgb(0 0 0/0.1)'}}/>
+                                              <Legend wrapperStyle={{fontSize:'11px',color:'#64748b'}} iconType="circle"/>
+                                          </PieChart>
+                                      </ResponsiveContainer>
+                                  </div>
+                              )}
+                          </div>
+
+                          {/* YoY + 6-Month table — combined collapsible */}
+                          <div className="border border-slate-200 rounded-2xl overflow-hidden">
+                              <button
+                                  onClick={() => setReportHistoryOpen(o => !o)}
+                                  className="w-full flex items-center justify-between px-4 py-3 bg-slate-50 hover:bg-slate-100 transition-colors text-sm font-bold text-slate-600"
+                              >
+                                  <span>เปรียบเทียบ 6 เดือนและปีก่อน</span>
+                                  <ChevronRight size={16} className={`transition-transform ${reportHistoryOpen ? 'rotate-90' : ''}`}/>
+                              </button>
+                              {reportHistoryOpen && (
+                                  <div className="bg-white space-y-4 p-4 animate-fade-in">
+                                      {/* Income vs Expense chart */}
+                                      <div>
+                                          <div className="flex items-center justify-between mb-2">
+                                              <p className="text-xs font-bold text-slate-500">รายได้ vs รายจ่าย (6 เดือน)</p>
+                                              <div className="flex gap-3">
+                                                  <span className="flex items-center gap-1 text-xs text-slate-400"><span className="w-2 h-2 rounded-sm bg-blue-200 inline-block"></span>รายได้</span>
+                                                  <span className="flex items-center gap-1 text-xs text-slate-400"><span className="w-2 h-2 rounded-sm bg-red-200 inline-block"></span>รายจ่าย</span>
+                                              </div>
+                                          </div>
+                                          <ResponsiveContainer width="100%" height={160}>
+                                              <BarChart data={monthHistorySummary} barGap={4}>
+                                                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9"/>
+                                                  <XAxis dataKey="shortLabel" tick={{fontSize:10, fill:'#94a3b8'}} axisLine={false} tickLine={false} interval={0}/>
+                                                  <YAxis hide/>
+                                                  <Tooltip formatter={(v) => `฿${Math.round(v).toLocaleString()}`} contentStyle={{borderRadius:'12px',border:'none',boxShadow:'0 10px 15px -3px rgb(0 0 0/0.1)'}}/>
+                                                  <Bar dataKey="income" fill="#B5D4F4" radius={[4,4,0,0]} name="รายได้"/>
+                                                  <Bar dataKey="expense" fill="#F7C1C1" radius={[4,4,0,0]} name="รายจ่าย"/>
+                                              </BarChart>
+                                          </ResponsiveContainer>
+                                      </div>
+                                      {/* YoY chart */}
+                                      <div>
+                                          <div className="flex items-center justify-between mb-2">
+                                              <p className="text-xs font-bold text-slate-500">เทียบปีก่อน (รายได้)</p>
+                                              <div className="flex gap-3">
+                                                  <span className="flex items-center gap-1 text-xs text-slate-400"><span className="w-2 h-2 rounded-sm bg-teal-300 inline-block"></span>ปีนี้</span>
+                                                  <span className="flex items-center gap-1 text-xs text-slate-400"><span className="w-2 h-2 rounded-sm bg-slate-300 inline-block"></span>ปีก่อน</span>
+                                              </div>
+                                          </div>
+                                          <ResponsiveContainer width="100%" height={160}>
+                                              <BarChart data={monthHistorySummary} barGap={4}>
+                                                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9"/>
+                                                  <XAxis dataKey="shortLabel" tick={{fontSize:10, fill:'#94a3b8'}} axisLine={false} tickLine={false} interval={0}/>
+                                                  <YAxis hide/>
+                                                  <Tooltip formatter={(v) => `฿${Math.round(v).toLocaleString()}`} contentStyle={{borderRadius:'12px',border:'none',boxShadow:'0 10px 15px -3px rgb(0 0 0/0.1)'}}/>
+                                                  <Bar dataKey="income" fill="#5DCAA5" radius={[4,4,0,0]} name="ปีนี้"/>
+                                                  <Bar dataKey="prevIncome" fill="#D3D1C7" radius={[4,4,0,0]} name="ปีก่อน"/>
+                                              </BarChart>
+                                          </ResponsiveContainer>
+                                      </div>
+                                      {/* 6-month table */}
+                                      <div className="overflow-x-auto rounded-xl border border-slate-100">
+                                          <table className="w-full text-sm" style={{tableLayout:'fixed'}}>
+                                              <thead>
+                                                  <tr className="bg-slate-50">
+                                                      <th className="text-left px-4 py-2.5 text-xs text-slate-400 font-bold w-24">เดือน</th>
+                                                      <th className="text-right px-4 py-2.5 text-xs text-slate-400 font-bold">รายได้</th>
+                                                      <th className="text-right px-4 py-2.5 text-xs text-slate-400 font-bold">รายจ่าย</th>
+                                                      <th className="text-right px-4 py-2.5 text-xs text-slate-400 font-bold w-20">กำไร%</th>
+                                                  </tr>
+                                              </thead>
+                                              <tbody>
+                                                  {monthHistorySummary.map((row, idx) => {
+                                                      const profitPct = row.income > 0 ? Math.round((row.profit / row.income) * 100) : 0;
+                                                      const isCurrent = row.monthKey === reportMonth;
+                                                      return (
+                                                          <tr key={idx} className={`border-t border-slate-50 ${isCurrent ? 'bg-emerald-50/60' : 'hover:bg-slate-50/50'}`}>
+                                                              <td className="px-4 py-3 font-bold text-slate-700">
+                                                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                                                      {row.label}
+                                                                      {isCurrent && <span className="text-[9px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded font-bold">ปัจจุบัน</span>}
+                                                                  </div>
+                                                              </td>
+                                                              <td className="px-4 py-3 text-right font-bold text-blue-600">฿{row.income.toLocaleString()}</td>
+                                                              <td className="px-4 py-3 text-right text-red-500">฿{row.expense.toLocaleString()}</td>
+                                                              <td className="px-4 py-3 text-right">
+                                                                  <span className={`text-xs font-bold px-2 py-1 rounded-lg ${row.profit >= 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600'}`}>
+                                                                      {row.profit >= 0 ? '+' : ''}{profitPct}%
+                                                                  </span>
+                                                              </td>
+                                                          </tr>
+                                                      );
+                                                  })}
+                                              </tbody>
+                                          </table>
+                                      </div>
+                                  </div>
+                              )}
                           </div>
                       </div>
                   )}
@@ -2694,6 +2747,81 @@ export default function App() {
                       </div>
                   )}
 
+                  {/* ===== COSTS TAB ===== */}
+                  {reportViewMode === 'costs' && (
+                      <div className="space-y-4 animate-fade-in">
+                          {reportConsumableCostByRoom.total === 0 ? (
+                              <div className="text-center py-12 text-slate-400">
+                                  <Package size={40} className="mx-auto mb-3 opacity-30"/>
+                                  <p className="font-bold">ยังไม่มีข้อมูลต้นทุนของใช้เดือนนี้</p>
+                                  <p className="text-sm mt-1">บันทึกของใช้จากหน้าสต๊อกหรือเมนูแม่บ้าน</p>
+                              </div>
+                          ) : (
+                              <>
+                                  <div className="bg-orange-50 border border-orange-200 rounded-2xl p-4 flex justify-between items-center">
+                                      <span className="font-bold text-orange-700">ต้นทุนของใช้รวมเดือนนี้</span>
+                                      <span className="text-2xl font-black text-orange-700">฿{reportConsumableCostByRoom.total.toLocaleString()}</span>
+                                  </div>
+                                  {reportConsumableCostByRoom.rows.length > 0 && (
+                                      <div className="bg-white border border-slate-100 rounded-2xl overflow-hidden shadow-sm">
+                                          <div className="px-4 py-3 border-b border-slate-100 font-bold text-sm text-slate-600">ต้นทุนแยกตามห้องพัก</div>
+                                          <div className="divide-y divide-slate-50">
+                                              {reportConsumableCostByRoom.rows.map(row => (
+                                                  <div key={row.roomName} className="flex items-center gap-3 px-4 py-3">
+                                                      <span className="text-sm font-bold text-slate-700 w-24 shrink-0">🏠 {row.roomName}</span>
+                                                      <div className="flex-1 bg-slate-100 rounded-full h-3 overflow-hidden">
+                                                          <div className="h-full rounded-full bg-orange-400" style={{width:`${Math.round((row.cost / reportConsumableCostByRoom.total) * 100)}%`}}/>
+                                                      </div>
+                                                      <span className="text-sm font-bold text-orange-700 w-24 text-right shrink-0">฿{Math.round(row.cost).toLocaleString()}</span>
+                                                  </div>
+                                              ))}
+                                          </div>
+                                      </div>
+                                  )}
+                                  {/* Unassigned usage */}
+                                  {(() => {
+                                      const unassigned = consumableLogs.filter(l => l.logType === 'use' && l.date?.startsWith(reportMonth) && !l.roomId).reduce((s,l) => s+(l.cost||0), 0);
+                                      return unassigned > 0 ? (
+                                          <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 flex justify-between text-sm">
+                                              <span className="text-slate-500">ไม่ระบุห้อง</span>
+                                              <span className="font-bold text-slate-600">฿{Math.round(unassigned).toLocaleString()}</span>
+                                          </div>
+                                      ) : null;
+                                  })()}
+                                  {/* Usage log for this month */}
+                                  <div className="bg-white border border-slate-100 rounded-2xl overflow-hidden shadow-sm">
+                                      <div className="px-4 py-3 border-b border-slate-100 font-bold text-sm text-slate-600">รายการของใช้เดือนนี้</div>
+                                      <div className="overflow-x-auto">
+                                          <table className="w-full text-sm min-w-[400px]">
+                                              <thead className="bg-slate-50 text-xs text-slate-400 font-bold">
+                                                  <tr>
+                                                      <th className="px-4 py-2.5 text-left">วันที่</th>
+                                                      <th className="px-4 py-2.5 text-left">รายการ</th>
+                                                      <th className="px-4 py-2.5 text-left">ห้อง</th>
+                                                      <th className="px-4 py-2.5 text-center">จำนวน</th>
+                                                      <th className="px-4 py-2.5 text-right">ต้นทุน</th>
+                                                  </tr>
+                                              </thead>
+                                              <tbody className="divide-y divide-slate-50">
+                                                  {consumableLogs.filter(l => l.logType === 'use' && l.date?.startsWith(reportMonth))
+                                                      .sort((a,b) => (b.createdAt?.seconds||0)-(a.createdAt?.seconds||0))
+                                                      .map(l => (
+                                                          <tr key={l.id} className="hover:bg-slate-50/50">
+                                                              <td className="px-4 py-2.5 text-xs text-slate-400">{formatThaiDate(l.date,'short')}</td>
+                                                              <td className="px-4 py-2.5 font-medium text-slate-700">{l.consumableName}</td>
+                                                              <td className="px-4 py-2.5 text-xs text-slate-500">{l.roomName || '—'}</td>
+                                                              <td className="px-4 py-2.5 text-center text-slate-600">{l.qty} {l.unit}</td>
+                                                              <td className="px-4 py-2.5 text-right font-medium text-orange-600">{l.cost > 0 ? `฿${(l.cost).toLocaleString(undefined,{maximumFractionDigits:2})}` : '—'}</td>
+                                                          </tr>
+                                                      ))}
+                                              </tbody>
+                                          </table>
+                                      </div>
+                                  </div>
+                              </>
+                          )}
+                      </div>
+                  )}
 
                </div>
            </div>
@@ -2701,6 +2829,45 @@ export default function App() {
       </div>
 
       {/* --- Modals --- */}
+
+      {/* ─── Export Report Modal ─────────────────────────────────────────────── */}
+      <Modal isOpen={isExportModalOpen} onClose={() => setIsExportModalOpen(false)} title="Export รายงาน">
+        <div className="space-y-4">
+          <p className="text-sm text-slate-500">เลือกข้อมูลที่ต้องการ export เป็น CSV สำหรับเดือน <span className="font-bold text-slate-700">{formatThaiDate(`${reportMonth}-01`,'monthYear')}</span></p>
+          <div className="space-y-3">
+            {[
+              { key: 'income',     label: 'รายรับ / การจอง',     desc: `${reportData.reportBookings.length} รายการ`,   color: 'emerald' },
+              { key: 'expense',    label: 'รายจ่าย',              desc: `${reportData.reportExpenses.length} รายการ`,   color: 'red'     },
+              { key: 'consumable', label: 'ต้นทุนของใช้',          desc: `${consumableLogs.filter(l=>l.logType==='use'&&l.date?.startsWith(reportMonth)).length} รายการ`, color: 'orange'  },
+            ].map(opt => (
+              <label key={opt.key} className={`flex items-center gap-4 p-4 rounded-2xl border-2 cursor-pointer transition-all ${exportOptions[opt.key] ? `border-${opt.color}-400 bg-${opt.color}-50/50` : 'border-slate-200 bg-white hover:bg-slate-50'}`}>
+                <input type="checkbox" className="w-5 h-5 accent-emerald-600 cursor-pointer" checked={exportOptions[opt.key]} onChange={e => setExportOptions(o => ({...o, [opt.key]: e.target.checked}))}/>
+                <div className="flex-1">
+                  <p className="font-bold text-slate-800">{opt.label}</p>
+                  <p className="text-xs text-slate-400">{opt.desc}</p>
+                </div>
+                <Download size={16} className={exportOptions[opt.key] ? `text-${opt.color}-500` : 'text-slate-300'}/>
+              </label>
+            ))}
+          </div>
+          <button
+            onClick={() => {
+              if (exportOptions.income)     exportToCSV(reportData.reportBookings, `รายรับ_${reportMonth}`);
+              if (exportOptions.expense)    exportToCSV(reportData.reportExpenses, `รายจ่าย_${reportMonth}`);
+              if (exportOptions.consumable) exportToCSV(
+                consumableLogs.filter(l=>l.logType==='use'&&l.date?.startsWith(reportMonth)).map(l=>({
+                  วันที่: l.date, รายการ: l.consumableName, ห้อง: l.roomName||'', จำนวน: l.qty, หน่วย: l.unit, ต้นทุน: l.cost||0
+                })),
+                `ต้นทุนของใช้_${reportMonth}`
+              );
+              setIsExportModalOpen(false);
+            }}
+            className="w-full py-3.5 bg-emerald-600 text-white rounded-2xl font-bold shadow-lg shadow-emerald-200 hover:bg-emerald-700 flex items-center justify-center gap-2 transition-all active:scale-95"
+          >
+            <Download size={18}/> Download ที่เลือก
+          </button>
+        </div>
+      </Modal>
 
       {/* Temp Guest Modal */}
       <Modal isOpen={isTempModalOpen} onClose={() => setIsTempModalOpen(false)} title={`ลูกค้าชั่วคราว — ${tempRoom?.name || ''}`}>
@@ -3222,6 +3389,22 @@ export default function App() {
               </p>
             )}
           </div>
+          {consumableItemFormMode === 'edit' && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-2">
+              <label className="block text-amber-700 font-bold text-xs uppercase tracking-wider">ต้นทุนเฉลี่ยต่อหน่วย (แก้ไขได้)</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number" min="0" step="0.01"
+                  placeholder="0.00"
+                  className="w-36 p-3 bg-white border border-amber-200 rounded-xl focus:ring-2 focus:ring-amber-400 outline-none font-bold text-lg text-amber-800"
+                  value={consumableItemForm.avgCostPerUnit}
+                  onChange={e => setConsumableItemForm({...consumableItemForm, avgCostPerUnit: e.target.value})}
+                />
+                <span className="text-sm text-amber-600 font-bold">฿ / {consumableItemForm.unit || 'หน่วย'}</span>
+              </div>
+              <p className="text-[11px] text-amber-600">ปกติระบบคำนวณอัตโนมัติจากประวัติซื้อ แก้ตรงนี้เพื่อปรับค่าด้วยตนเอง</p>
+            </div>
+          )}
           <div>
             <label className="block text-slate-500 font-bold mb-1.5 text-xs">แจ้งเตือนเมื่อเหลือน้อยกว่า</label>
             <div className="flex items-center gap-2">
