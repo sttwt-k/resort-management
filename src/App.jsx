@@ -149,6 +149,7 @@ export default function App() {
   
   const [staffCheckInForm, setStaffCheckInForm] = useState({
       guestName: '',
+      phone: '',
       checkInTimeStr: getNowTimeStr(),
       totalPrice: 0,
       nights: 1,
@@ -606,6 +607,16 @@ export default function App() {
   const confirmStaffCheckIn = async (isBookedRoom = false) => {
       if (useMockData) { showNotification('โหมดตัวอย่าง: บันทึกข้อมูลสำเร็จ'); setIsStaffCheckInModalOpen(false); setIsStaffBookingModalOpen(false); setSelectedStaffRooms([]); return; }
 
+      // Validate required fields for walk-in
+      if (!isBookedRoom) {
+          if (!staffCheckInForm.guestName.trim()) {
+              showNotification('กรุณาระบุชื่อลูกค้า', 'error'); return;
+          }
+          if (!staffCheckInForm.phone.trim()) {
+              showNotification('กรุณาระบุเบอร์โทรลูกค้า', 'error'); return;
+          }
+      }
+
       const checkInNights = staffCheckInForm.nights || 1;
       const checkoutDate = addDays(selectedDate, checkInNights); 
       const checkInDocNo = generateSequentialDocNo('RC', selectedDate, bookings);
@@ -637,7 +648,7 @@ export default function App() {
                   if (status === 'occupied' || status === 'booked') return null;
                   return addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'bookings'), {
                       roomId: rId, roomName: room.name, roomPrice: room.price,
-                      guestName: staffCheckInForm.guestName || 'walk-in', phone: '',
+                      guestName: staffCheckInForm.guestName.trim(), phone: staffCheckInForm.phone.trim(),
                       checkInDate: selectedDate,
                       checkOutDate: checkoutDate,
                       nights: checkInNights,
@@ -660,7 +671,7 @@ export default function App() {
               if(batchPromises.length > 0) await Promise.all(batchPromises);
               showNotification(`เช็คอินเรียบร้อย (${checkInNights} คืน)`);
               setIsStaffCheckInModalOpen(false);
-              setStaffCheckInForm(prev => ({...prev, guestName: '', checkInTimeStr: getNowTimeStr(), billPhoto: null}));
+              setStaffCheckInForm(prev => ({...prev, guestName: '', phone: '', checkInTimeStr: getNowTimeStr(), billPhoto: null}));
               setSelectedStaffRooms([]);
           }
       } catch (e) {
@@ -3001,15 +3012,28 @@ export default function App() {
 
       <Modal isOpen={isStaffCheckInModalOpen} onClose={() => setIsStaffCheckInModalOpen(false)} title="ยืนยันการรับเงิน (Walk-in)">
           <div className="space-y-6">
-              <div>
-                  <label className="block text-slate-500 font-bold mb-1.5 text-xs">ชื่อลูกค้า (ไม่บังคับ)</label>
-                  <input
-                      type="text"
-                      placeholder="ชื่อ หรือเว้นว่างเพื่อใช้ walk-in"
-                      className="w-full p-3 bg-slate-50 border-0 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
-                      value={staffCheckInForm.guestName}
-                      onChange={e => setStaffCheckInForm({...staffCheckInForm, guestName: e.target.value})}
-                  />
+              <div className="grid grid-cols-1 gap-3">
+                  <div>
+                      <label className="block text-slate-500 font-bold mb-1.5 text-xs">ชื่อลูกค้า <span className="text-red-500">*</span></label>
+                      <input
+                          type="text"
+                          placeholder="ชื่อ-นามสกุล"
+                          className={`w-full p-3 bg-slate-50 border rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 outline-none transition-colors ${!staffCheckInForm.guestName.trim() ? 'border-slate-200' : 'border-emerald-300 bg-emerald-50'}`}
+                          value={staffCheckInForm.guestName}
+                          onChange={e => setStaffCheckInForm({...staffCheckInForm, guestName: e.target.value})}
+                          autoFocus
+                      />
+                  </div>
+                  <div>
+                      <label className="block text-slate-500 font-bold mb-1.5 text-xs">เบอร์โทรศัพท์ <span className="text-red-500">*</span></label>
+                      <input
+                          type="tel"
+                          placeholder="0xx-xxx-xxxx"
+                          className={`w-full p-3 bg-slate-50 border rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 outline-none transition-colors ${!staffCheckInForm.phone.trim() ? 'border-slate-200' : 'border-emerald-300 bg-emerald-50'}`}
+                          value={staffCheckInForm.phone}
+                          onChange={e => setStaffCheckInForm({...staffCheckInForm, phone: e.target.value})}
+                      />
+                  </div>
               </div>
               <div className="bg-emerald-50 rounded-2xl p-6 border border-emerald-100 relative">
                   <div className="flex justify-between items-center mb-4 pb-4 border-b border-emerald-200/50">
