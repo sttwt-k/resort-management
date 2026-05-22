@@ -474,6 +474,8 @@ export default function App() {
           if (status === 'booked') {
              setSelectedBookedRoom({ room, booking });
              setStaffCheckInForm({
+                 guestName: '',
+                 phone: '',
                  totalPrice: 0,
                  nights: 1,
                  paymentMethod: 'เงินสด',
@@ -563,8 +565,10 @@ export default function App() {
               }
           });
           setStaffCheckInForm({
+              guestName: '',
+              phone: '',
               totalPrice: total,
-              nights: 1, 
+              nights: 1,
               paymentMethod: 'เงินสด',
               isReceiptNeeded: false,
               keyDepositCollected: false,
