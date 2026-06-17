@@ -1,15 +1,40 @@
 import React, { useState } from 'react';
 import { Shield, User, Lock, ArrowRight, X } from 'lucide-react';
+import { signInWithEmailAndPassword } from 'firebase/auth';
+import { auth } from '../lib/firebase';
 
 export const LoginScreen = ({ onLogin }) => {
-    const [pass, setPass] = useState('');
+    const [email, setEmail] = useState('');
+    const [password, setPassword] = useState('');
     const [error, setError] = useState('');
+    const [loading, setLoading] = useState(false);
     const [showOwnerInput, setShowOwnerInput] = useState(false);
 
-    const handleOwnerLogin = (e) => {
+    const handleOwnerLogin = async (e) => {
         e.preventDefault();
-        if (pass === import.meta.env.VITE_OWNER_PIN) onLogin('owner');
-        else setError('รหัสผ่านไม่ถูกต้อง');
+        if (!email || !password) { setError('กรุณากรอกอีเมลและรหัสผ่าน'); return; }
+        setLoading(true);
+        setError('');
+        try {
+            const result = await signInWithEmailAndPassword(auth, email, password);
+            if (result.user.email?.endsWith('@janchpa.internal')) {
+                onLogin('owner');
+            } else {
+                setError('บัญชีนี้ไม่มีสิทธิ์เข้าถึง');
+                await auth.signOut();
+            }
+        } catch (err) {
+            setError('อีเมลหรือรหัสผ่านไม่ถูกต้อง');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleClose = () => {
+        setShowOwnerInput(false);
+        setError('');
+        setEmail('');
+        setPassword('');
     };
 
     return (
@@ -47,7 +72,7 @@ export const LoginScreen = ({ onLogin }) => {
                         </button>
                     )}
 
-                    <div className={`transition-all duration-300 ease-in-out`}>
+                    <div className="transition-all duration-300 ease-in-out">
                         {!showOwnerInput ? (
                             <button
                                 onClick={() => setShowOwnerInput(true)}
@@ -67,21 +92,32 @@ export const LoginScreen = ({ onLogin }) => {
                         ) : (
                             <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100 animate-fade-in">
                                 <div className="flex justify-between items-center mb-4">
-                                    <h3 className="font-bold text-slate-700 flex items-center gap-2 text-sm"><Lock size={16}/> รหัสผ่านเจ้าของ</h3>
-                                    <button onClick={() => {setShowOwnerInput(false); setError(''); setPass('');}} className="text-slate-400 hover:text-slate-600 bg-white p-1 rounded-full shadow-sm"><X size={16}/></button>
+                                    <h3 className="font-bold text-slate-700 flex items-center gap-2 text-sm"><Lock size={16}/> เข้าสู่ระบบเจ้าของ</h3>
+                                    <button onClick={handleClose} className="text-slate-400 hover:text-slate-600 bg-white p-1 rounded-full shadow-sm"><X size={16}/></button>
                                 </div>
                                 <form onSubmit={handleOwnerLogin} className="space-y-3">
                                     <input
-                                        type="password"
-                                        placeholder="PIN Code"
-                                        className="w-full p-3 border-0 bg-white rounded-xl text-center text-2xl font-bold tracking-[0.5em] focus:ring-2 focus:ring-emerald-500 shadow-inner text-emerald-800 placeholder:text-slate-200 placeholder:font-normal placeholder:tracking-normal outline-none transition-all"
-                                        value={pass}
+                                        type="email"
+                                        placeholder="อีเมล"
+                                        className="w-full p-3 border-0 bg-white rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 shadow-inner text-slate-700 placeholder:text-slate-300 outline-none transition-all"
+                                        value={email}
                                         autoFocus
-                                        onChange={(e) => {setPass(e.target.value); setError('');}}
+                                        onChange={(e) => { setEmail(e.target.value); setError(''); }}
+                                    />
+                                    <input
+                                        type="password"
+                                        placeholder="รหัสผ่าน"
+                                        className="w-full p-3 border-0 bg-white rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 shadow-inner text-slate-700 placeholder:text-slate-300 outline-none transition-all"
+                                        value={password}
+                                        onChange={(e) => { setPassword(e.target.value); setError(''); }}
                                     />
                                     {error && <p className="text-red-500 text-xs text-center font-medium bg-red-50 py-1 rounded-lg">{error}</p>}
-                                    <button type="submit" className="w-full py-3 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700 shadow-lg shadow-emerald-200 transition-all transform active:scale-95">
-                                        เข้าสู่ระบบ
+                                    <button
+                                        type="submit"
+                                        disabled={loading}
+                                        className="w-full py-3 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700 shadow-lg shadow-emerald-200 transition-all transform active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed"
+                                    >
+                                        {loading ? 'กำลังเข้าสู่ระบบ...' : 'เข้าสู่ระบบ'}
                                     </button>
                                 </form>
                             </div>

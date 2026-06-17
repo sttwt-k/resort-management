@@ -1,0 +1,39 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // =====================================================
+    // Resort Management App — Firestore Security Rules
+    // =====================================================
+    // โครงสร้างข้อมูล:
+    //   /artifacts/{appId}/public/data/rooms/{roomId}
+    //   /artifacts/{appId}/public/data/bookings/{bookingId}
+    //   /artifacts/{appId}/public/data/expenses/{expenseId}
+    //
+    // กฎ: ต้อง sign-in (anonymous หรือ custom token) ถึงจะอ่าน/เขียนได้
+    // =====================================================
+
+    // ล็อกทุกอย่างก่อน แล้วค่อยเปิดเฉพาะที่ต้องการ
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // เปิดสำหรับ user ที่ล็อกอินแล้วเท่านั้น (anonymous auth ก็ผ่าน)
+    match /artifacts/{appId}/public/data/{collection}/{docId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null
+                    && isValidCollection(collection)
+                    && request.resource.data.keys().size() > 0;
+      allow update: if request.auth != null
+                    && isValidCollection(collection);
+      allow delete: if request.auth != null
+                    && isValidCollection(collection);
+    }
+
+    // Helper: อนุญาตเฉพาะ collection ที่รู้จัก
+    function isValidCollection(col) {
+      return col in ['rooms', 'bookings', 'expenses', 'consumables', 'consumableLogs', 'consumableCategories'];
+    }
+  }
+}

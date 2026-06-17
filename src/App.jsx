@@ -7,6 +7,7 @@ import {
 import { ref as storageRef, deleteObject } from 'firebase/storage';
 import { Modal, ConfirmModal } from './components/Modal';
 import { LoginScreen } from './components/LoginScreen';
+import { OfflineBanner } from './components/OfflineBanner';
 import {
   DEFAULT_ROOM_SEEDS, DEFAULT_EXPENSE_CATEGORIES, PAYMENT_METHODS, COLORS, TEMP_DURATIONS,
   getNowTimeStr, formatDate, addDays, calculateNights, calculateAge,
@@ -1793,6 +1794,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen w-full overflow-x-hidden bg-slate-100 text-slate-800 pb-28 md:pb-20 font-sans">
+      <OfflineBanner useMockData={useMockData} />
       {notification && <div className={`fixed top-6 right-6 px-6 py-4 rounded-2xl shadow-xl z-[70] text-white font-medium flex items-center gap-2 animate-fade-in ${notification.type === 'error' ? 'bg-red-500' : 'bg-emerald-600'}`}>{notification.type === 'error' ? <AlertCircle size={20}/> : <CheckCircle size={20}/>} {notification.message}</div>}
       <ConfirmModal dialog={confirmDialog} onClose={() => setConfirmDialog(null)} />
 
