@@ -1,40 +1,25 @@
 import React, { useState } from 'react';
 import { Shield, User, Lock, ArrowRight, X } from 'lucide-react';
-import { signInWithEmailAndPassword } from 'firebase/auth';
-import { auth } from '../lib/firebase';
 
 export const LoginScreen = ({ onLogin }) => {
-    const [email, setEmail] = useState('');
-    const [password, setPassword] = useState('');
+    const [pin, setPin] = useState('');
     const [error, setError] = useState('');
-    const [loading, setLoading] = useState(false);
     const [showOwnerInput, setShowOwnerInput] = useState(false);
 
-    const handleOwnerLogin = async (e) => {
+    const handleOwnerLogin = (e) => {
         e.preventDefault();
-        if (!email || !password) { setError('กรุณากรอกอีเมลและรหัสผ่าน'); return; }
-        setLoading(true);
-        setError('');
-        try {
-            const result = await signInWithEmailAndPassword(auth, email, password);
-            if (result.user.email?.endsWith('@janchpa.internal')) {
-                onLogin('owner');
-            } else {
-                setError('บัญชีนี้ไม่มีสิทธิ์เข้าถึง');
-                await auth.signOut();
-            }
-        } catch (err) {
-            setError('อีเมลหรือรหัสผ่านไม่ถูกต้อง');
-        } finally {
-            setLoading(false);
+        if (pin === import.meta.env.VITE_OWNER_PIN) {
+            onLogin('owner');
+        } else {
+            setError('รหัสไม่ถูกต้อง');
+            setPin('');
         }
     };
 
     const handleClose = () => {
         setShowOwnerInput(false);
         setError('');
-        setEmail('');
-        setPassword('');
+        setPin('');
     };
 
     return (
@@ -97,27 +82,20 @@ export const LoginScreen = ({ onLogin }) => {
                                 </div>
                                 <form onSubmit={handleOwnerLogin} className="space-y-3">
                                     <input
-                                        type="email"
-                                        placeholder="อีเมล"
-                                        className="w-full p-3 border-0 bg-white rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 shadow-inner text-slate-700 placeholder:text-slate-300 outline-none transition-all"
-                                        value={email}
-                                        autoFocus
-                                        onChange={(e) => { setEmail(e.target.value); setError(''); }}
-                                    />
-                                    <input
                                         type="password"
-                                        placeholder="รหัสผ่าน"
-                                        className="w-full p-3 border-0 bg-white rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 shadow-inner text-slate-700 placeholder:text-slate-300 outline-none transition-all"
-                                        value={password}
-                                        onChange={(e) => { setPassword(e.target.value); setError(''); }}
+                                        placeholder="ใส่รหัส PIN"
+                                        inputMode="numeric"
+                                        className="w-full p-3 border-0 bg-white rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 shadow-inner text-slate-700 placeholder:text-slate-300 outline-none transition-all text-center tracking-widest text-lg"
+                                        value={pin}
+                                        autoFocus
+                                        onChange={(e) => { setPin(e.target.value); setError(''); }}
                                     />
                                     {error && <p className="text-red-500 text-xs text-center font-medium bg-red-50 py-1 rounded-lg">{error}</p>}
                                     <button
                                         type="submit"
-                                        disabled={loading}
-                                        className="w-full py-3 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700 shadow-lg shadow-emerald-200 transition-all transform active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed"
+                                        className="w-full py-3 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700 shadow-lg shadow-emerald-200 transition-all transform active:scale-95"
                                     >
-                                        {loading ? 'กำลังเข้าสู่ระบบ...' : 'เข้าสู่ระบบ'}
+                                        เข้าสู่ระบบ
                                     </button>
                                 </form>
                             </div>
