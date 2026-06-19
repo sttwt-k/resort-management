@@ -31,6 +31,7 @@ export const ConfirmModal = ({ dialog, onClose }) => {
     cancelLabel = 'ยกเลิก',
     variant = 'default',
     onConfirm,
+    onCancel,
   } = dialog;
 
   const confirmColors =
@@ -47,7 +48,7 @@ export const ConfirmModal = ({ dialog, onClose }) => {
         </div>
         <div className="px-6 pb-6 flex gap-3">
           <button
-            onClick={onClose}
+            onClick={() => { if (onCancel) onCancel(); onClose(); }}
             className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-2xl font-bold transition-all active:scale-95"
           >
             {cancelLabel}

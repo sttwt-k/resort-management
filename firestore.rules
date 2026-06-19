@@ -13,7 +13,8 @@ service cloud.firestore {
     // =====================================================
 
     function isOwner() {
-      return request.auth != null && request.auth.uid == 'UuSyhl057OdUcvznOgsrq1lHhct2';
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/artifacts/my-resort-app-v1/public/data/ownerSessions/$(request.auth.uid));
     }
 
     function isAuthenticated() {
@@ -41,8 +42,7 @@ service cloud.firestore {
       allow delete: if isOwner();
       allow update: if isOwner() ||
         (isAuthenticated() && !request.resource.data.diff(resource.data)
-          .affectedKeys().hasAny(['totalPrice', 'discount', 'paymentStatus',
-                                  'amountPaid', 'totalPaid', 'roomPrice',
+          .affectedKeys().hasAny(['totalPrice', 'discount', 'roomPrice',
                                   'extraBedPrice', 'deposit']));
     }
 
@@ -51,10 +51,19 @@ service cloud.firestore {
       allow read, write: if isOwner();
     }
 
-    // CONSUMABLES — staff read; owner write
+    // CONSUMABLES — staff read + update stock fields; owner full write
     match /artifacts/{appId}/public/data/consumables/{docId} {
       allow read: if isAuthenticated();
-      allow write: if isOwner();
+      allow create, delete: if isOwner();
+      allow update: if isOwner() ||
+        (isAuthenticated() && request.resource.data.diff(resource.data)
+          .affectedKeys().hasOnly(['roomStock', 'stockQty']));
+    }
+
+    // OWNER SESSIONS — anonymous UID marked as owner after PIN verification
+    match /artifacts/{appId}/public/data/ownerSessions/{uid} {
+      allow read: if isAuthenticated();
+      allow write, delete: if isAuthenticated() && request.auth.uid == uid;
     }
 
     // CONSUMABLE LOGS — staff read + create; owner full; no staff delete (logs are immutable)

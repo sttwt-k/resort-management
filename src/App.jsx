@@ -299,6 +299,30 @@ export default function App() {
     };
   }, []);
 
+  const handleLogin = async (newRole) => {
+    setRole(newRole);
+    if (newRole === 'owner' && user) {
+      try {
+        await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'ownerSessions', user.uid), {
+          loginAt: Timestamp.now(),
+        });
+      } catch (e) {
+        console.error('Failed to write owner session:', e);
+      }
+    }
+  };
+
+  const handleLogout = async () => {
+    if (role === 'owner' && user) {
+      try {
+        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'ownerSessions', user.uid));
+      } catch (e) {
+        console.error('Failed to delete owner session:', e);
+      }
+    }
+    setRole(null);
+  };
+
   useEffect(() => {
     if (useMockData) {
         setRooms(DEFAULT_ROOM_SEEDS);
@@ -1488,11 +1512,10 @@ export default function App() {
         if (!item) continue;
         const numQty = Number(qty);
         const currentRoom = item.roomStock ?? 0;
-        const currentMain = item.mainStock ?? item.stockQty ?? 0;
         const newRoomStock = Math.max(0, currentRoom - numQty);
         await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'consumables', item.id), {
           roomStock: newRoomStock,
-          stockQty: currentMain + newRoomStock,
+          stockQty: (item.mainStock ?? 0) + newRoomStock,
         });
         await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'consumableLogs'), {
           consumableId: item.id, consumableName: item.name, qty: numQty,
@@ -1532,7 +1555,7 @@ export default function App() {
         return [
           updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'consumables', cId), {
             roomStock: Math.max(0, (item.roomStock ?? 0) - numQty),
-            stockQty: Math.max(0, (item.mainStock ?? item.stockQty ?? 0)) + Math.max(0, (item.roomStock ?? 0) - numQty),
+            stockQty: Math.max(0, item.mainStock ?? 0) + Math.max(0, (item.roomStock ?? 0) - numQty),
           }),
           addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'consumableLogs'), {
             consumableId: cId, consumableName: item.name, qty: numQty, unit: item.unit,
@@ -1778,7 +1801,7 @@ export default function App() {
   }, [consumableLogs, reportMonth]);
 
   if (loading) return <div className="h-screen flex items-center justify-center text-emerald-600 font-bold bg-slate-100 animate-pulse">กำลังโหลดข้อมูล...</div>;
-  if (!role) return <LoginScreen onLogin={setRole} />;
+  if (!role) return <LoginScreen onLogin={handleLogin} />;
 
   const availableRoomsForAdd = rooms.filter(r => { if (r.id === selectedRoom?.id) return false; return isRoomAvailable(r.id, formData.checkInDate, formData.checkOutDate); });
   
@@ -1850,7 +1873,7 @@ export default function App() {
               )}
               <div className="h-8 w-[1px] bg-slate-200 mx-2"></div>
               {role === 'owner' && <button onClick={() => setIsRoomSettingsOpen(true)} className="p-3 bg-white border border-slate-200 text-slate-500 rounded-xl hover:bg-slate-50 hover:text-emerald-600 transition-colors shadow-sm"><Settings size={18}/></button>}
-              <button onClick={() => setRole(null)} className="p-3 bg-red-50 text-red-500 rounded-xl hover:bg-red-100 hover:text-red-600 transition-colors shadow-sm"><LogOut size={18}/></button>
+              <button onClick={handleLogout} className="p-3 bg-red-50 text-red-500 rounded-xl hover:bg-red-100 hover:text-red-600 transition-colors shadow-sm"><LogOut size={18}/></button>
           </div>
 
           <div className="flex md:hidden items-center gap-1.5 min-w-0">
@@ -1891,7 +1914,7 @@ export default function App() {
                     )}
                   </button>
                 )}
-                <button onClick={() => setRole(null)} className="p-4 rounded-xl text-lg font-bold flex items-center gap-3 text-red-500 bg-red-50"><LogOut size={24}/> ออกจากระบบ</button>
+                <button onClick={handleLogout} className="p-4 rounded-xl text-lg font-bold flex items-center gap-3 text-red-500 bg-red-50"><LogOut size={24}/> ออกจากระบบ</button>
             </div>
         )}
       </header>
