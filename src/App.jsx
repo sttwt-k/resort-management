@@ -547,7 +547,9 @@ export default function App() {
             checkInDate: booking.checkInDate, checkOutDate: booking.checkOutDate, nights,
             deposit: Number(booking.deposit), roomPrice: Number(booking.roomPrice),
             keyDeposit: booking.keyDeposit ? Number(booking.keyDeposit) : (100 * allGroupIds.length),
-            selectedAdditionalRooms: [], groupCheckInRooms: allGroupIds,
+            // seed with every room currently in this booking's group (including the clicked room itself)
+            // so the owner can see and toggle each one when editing/swapping rooms
+            selectedAdditionalRooms: [booking.roomId, ...groupBookings.map(b => b.roomId)], groupCheckInRooms: allGroupIds,
             currentPayment: 0,
             licensePlate: booking.licensePlate || '', idCard: booking.idCard || '', lineId: booking.lineId || '', dob: booking.dob || '', billPhotoUrl: booking.billPhotoUrl || null,
             paymentMethod: booking.paymentMethod || 'เงินสด',
@@ -810,13 +812,18 @@ export default function App() {
     if (!user) return;
     if(!formData.guestName || !formData.phone) return alert('กรุณากรอกชื่อและเบอร์โทรศัพท์');
 
-    if (!formData.id) { 
+    if (!formData.id) {
         if (!isRoomAvailable(selectedRoom.id, formData.checkInDate, formData.checkOutDate)) return alert(`ห้อง ${selectedRoom.name} ไม่ว่างในช่วงเวลานี้`);
         for (const rid of formData.selectedAdditionalRooms) {
             if (!isRoomAvailable(rid, formData.checkInDate, formData.checkOutDate)) return alert(`ห้องไม่ว่างในช่วงเวลานี้`);
         }
     } else {
-        if (!isRoomAvailable(selectedRoom.id, formData.checkInDate, formData.checkOutDate, formData.id)) return alert(`ห้องไม่ว่างในช่วงเวลานี้`);
+        if (formData.selectedAdditionalRooms.length === 0) return alert('กรุณาเลือกห้องพักอย่างน้อย 1 ห้อง (หากต้องการยกเลิกทั้งหมด ให้กดปุ่มยกเลิกการจอง)');
+        const originalGroupRoomBookings = formData.groupCheckInRooms.map(id => bookings.find(b => b.id === id)).filter(Boolean);
+        for (const rid of formData.selectedAdditionalRooms) {
+            const ownBooking = originalGroupRoomBookings.find(b => b.roomId === rid);
+            if (!isRoomAvailable(rid, formData.checkInDate, formData.checkOutDate, ownBooking ? ownBooking.id : null)) return alert(`ห้องไม่ว่างในช่วงเวลานี้`);
+        }
     }
 
     if (useMockData) { 
@@ -862,11 +869,19 @@ export default function App() {
         setIsBookingSummaryOpen(true);
         setIsBookingModalOpen(false);
       } else {
-         // ✅ BUG FIX 5: Add new rooms to group if any selected
-         const roomsToBook = [...formData.selectedAdditionalRooms];
-         if(roomsToBook.length > 0) {
+         // Rooms currently in the group (as loaded when the modal opened), vs. what the owner
+         // ended up with after toggling checkboxes (which may add rooms, remove rooms, or both —
+         // e.g. swapping room 2 for room 4 in a 2-room booking).
+         const originalGroupRoomBookings = formData.groupCheckInRooms.map(id => bookings.find(b => b.id === id)).filter(Boolean);
+         const finalRoomIds = formData.selectedAdditionalRooms;
+
+         const roomsToAdd = finalRoomIds.filter(rid => !originalGroupRoomBookings.some(b => b.roomId === rid));
+         const bookingsToRemove = originalGroupRoomBookings.filter(b => !finalRoomIds.includes(b.roomId));
+         const bookingsToKeep = originalGroupRoomBookings.filter(b => finalRoomIds.includes(b.roomId));
+
+         if (roomsToAdd.length > 0) {
              const depositDocNo = formData.docNo;
-             const batchPromises = roomsToBook.map((rId) => {
+             const batchPromises = roomsToAdd.map((rId) => {
                 const rConfig = rooms.find(r => r.id === rId);
                 return addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'bookings'), {
                     ...commonData, roomId: rConfig.id, roomName: rConfig.name, roomPrice: rConfig.price,
@@ -878,16 +893,23 @@ export default function App() {
              await Promise.all(batchPromises);
          }
 
-         // อัปเดตห้องหลัก
-         await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', formData.id), {
-             ...commonData, roomPrice: Number(formData.roomPrice), totalPrice: Number(formData.roomPrice) * nights, deposit: Number(formData.deposit)
-         });
+         if (bookingsToRemove.length > 0) {
+             await Promise.all(bookingsToRemove.map(b => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', b.id))));
+         }
 
-         // ✅ BUG FIX 5: Sync guest info and dates to all sibling rooms in the group
-         const siblingIds = formData.groupCheckInRooms.filter(id => id !== formData.id);
-         if (siblingIds.length > 0) {
-             const siblingUpdates = siblingIds.map(id =>
-                 updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', id), {
+         // อัปเดตห้องหลัก (เฉพาะกรณีที่ห้องเดิมยังอยู่ในรายการที่เลือก ไม่ได้ถูกสลับออกไป)
+         const primaryStillSelected = bookingsToKeep.some(b => b.id === formData.id);
+         if (primaryStillSelected) {
+             await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', formData.id), {
+                 ...commonData, roomPrice: Number(formData.roomPrice), totalPrice: Number(formData.roomPrice) * nights, deposit: Number(formData.deposit)
+             });
+         }
+
+         // ซิงค์ข้อมูลลูกค้า/วันที่ ไปยังห้องอื่นๆ ที่ยังอยู่ในกลุ่ม (ไม่รวมห้องหลักที่เพิ่งอัปเดตไปแล้ว)
+         const siblingsToSync = bookingsToKeep.filter(b => b.id !== formData.id);
+         if (siblingsToSync.length > 0) {
+             const siblingUpdates = siblingsToSync.map(b =>
+                 updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', b.id), {
                      guestName: formData.guestName,
                      phone: formData.phone,
                      checkInDate: formData.checkInDate,
@@ -903,10 +925,10 @@ export default function App() {
              );
              await Promise.all(siblingUpdates);
          }
-         
+
          const summary = generateBookingSummary(
             formData.guestName,
-            formData.roomName,
+            finalRoomIds.map(id => rooms.find(r => r.id === id)?.name).filter(Boolean).join(', ') || formData.roomName,
             formData.checkInDate,
             nights,
             formData.deposit,
@@ -1803,7 +1825,15 @@ export default function App() {
   if (loading) return <div className="h-screen flex items-center justify-center text-emerald-600 font-bold bg-slate-100 animate-pulse">กำลังโหลดข้อมูล...</div>;
   if (!role) return <LoginScreen onLogin={handleLogin} />;
 
-  const availableRoomsForAdd = rooms.filter(r => { if (r.id === selectedRoom?.id) return false; return isRoomAvailable(r.id, formData.checkInDate, formData.checkOutDate); });
+  // rooms already part of the booking being edited (including the clicked/primary room) should always
+  // be shown as selectable, since their own existing reservation would otherwise make isRoomAvailable
+  // report them as "occupied"
+  const groupRoomIds = formData.id ? formData.groupCheckInRooms.map(bId => bookings.find(b => b.id === bId)?.roomId).filter(Boolean) : [];
+  const availableRoomsForAdd = rooms.filter(r => {
+    if (!formData.id && r.id === selectedRoom?.id) return false;
+    if (groupRoomIds.includes(r.id)) return true;
+    return isRoomAvailable(r.id, formData.checkInDate, formData.checkOutDate);
+  });
   
   const fin = formData.groupCheckInRooms.length > 1 ? calculateGroupFinancials() : calculateSingleFinancials();
   const isGroupCheckIn = formData.groupCheckInRooms.length > 1;
