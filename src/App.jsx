@@ -138,6 +138,7 @@ export default function App() {
   const [messagePreviewText, setMessagePreviewText] = useState('');
 
   const [guestSearchTerm, setGuestSearchTerm] = useState('');
+  const [historyCustomer, setHistoryCustomer] = useState(null);
   const [timelineStartDate, setTimelineStartDate] = useState(formatDate(new Date()));
 
   const [selectedStaffRooms, setSelectedStaffRooms] = useState([]);
@@ -219,32 +220,57 @@ export default function App() {
 
   // Derived State
   const guestDirectory = useMemo(() => {
-    const uniqueGuests = {};
+    const guests = {};
     bookings.forEach(b => {
-        if(b.guestName && b.guestName !== 'รายวัน walk-in') {
-            const key = b.guestName.trim();
-            if(!uniqueGuests[key]) {
-                uniqueGuests[key] = {
-                    name: b.guestName,
-                    phone: b.phone || '',
-                    licensePlate: b.licensePlate || '',
-                    idCard: b.idCard || '',
-                    lineId: b.lineId || '',
-                    dob: b.dob || '',
-                    lastVisit: b.checkInDate,
-                    totalVisits: 0
-                };
-            }
-            if(b.phone) uniqueGuests[key].phone = b.phone;
-            if(b.licensePlate) uniqueGuests[key].licensePlate = b.licensePlate;
-            if(b.idCard) uniqueGuests[key].idCard = b.idCard;
-            if(b.lineId) uniqueGuests[key].lineId = b.lineId;
-            if(b.dob) uniqueGuests[key].dob = b.dob;
-            if(b.checkInDate > uniqueGuests[key].lastVisit) uniqueGuests[key].lastVisit = b.checkInDate;
-            uniqueGuests[key].totalVisits += 1;
+        if(!b.guestName || b.guestName === 'รายวัน walk-in') return;
+        if(b.status === 'cancelled') return; // ยกเลิกแล้วไม่นับเป็นการเข้าพัก
+        // ระบุตัวตนลูกค้าด้วยเบอร์โทรเป็นหลัก เพื่อไม่ให้ลูกค้าคนละคนที่ชื่อซ้ำกันถูกรวมเป็นคนเดียว
+        // และลูกค้าคนเดิม (เบอร์เดียวกัน) ที่ชื่อพิมพ์ต่างกันเล็กน้อยจะไม่ถูกนับซ้ำ
+        const phoneKey = (b.phone || '').trim();
+        const key = phoneKey ? `p:${phoneKey}` : `n:${b.guestName.trim()}`;
+        if(!guests[key]) {
+            guests[key] = {
+                key,
+                name: b.guestName.trim(),
+                phone: b.phone || '',
+                licensePlate: b.licensePlate || '',
+                idCard: b.idCard || '',
+                lineId: b.lineId || '',
+                dob: b.dob || '',
+                _nameDate: b.checkInDate || '',
+                visitsMap: {}
+            };
         }
+        const g = guests[key];
+        // เก็บข้อมูลติดต่อ/โปรไฟล์ล่าสุดที่มีค่า
+        if(b.phone) g.phone = b.phone;
+        if(b.licensePlate) g.licensePlate = b.licensePlate;
+        if(b.idCard) g.idCard = b.idCard;
+        if(b.lineId) g.lineId = b.lineId;
+        if(b.dob) g.dob = b.dob;
+        // ใช้ชื่อจากการจองล่าสุดเป็นชื่อที่แสดง
+        if((b.checkInDate || '') >= (g._nameDate || '')) { g.name = b.guestName.trim(); g._nameDate = b.checkInDate || ''; }
+        // จัดกลุ่มเป็น "การเข้าพัก" ตามวันเช็คอิน — หลายห้องในวันเดียวกัน = 1 ครั้ง แต่หลายห้อง
+        const vKey = b.checkInDate || 'unknown';
+        if(!g.visitsMap[vKey]) g.visitsMap[vKey] = { checkInDate: b.checkInDate, checkOutDate: b.checkOutDate, rooms: [] };
+        const v = g.visitsMap[vKey];
+        if(b.roomName && !v.rooms.includes(b.roomName)) v.rooms.push(b.roomName);
+        if(b.checkOutDate && (!v.checkOutDate || b.checkOutDate > v.checkOutDate)) v.checkOutDate = b.checkOutDate;
     });
-    return Object.values(uniqueGuests).sort((a,b) => b.lastVisit.localeCompare(a.lastVisit));
+    return Object.values(guests).map(g => {
+        const visits = Object.values(g.visitsMap)
+            .map(v => ({
+                checkInDate: v.checkInDate,
+                checkOutDate: v.checkOutDate,
+                rooms: v.rooms.slice().sort((a,b) => a.localeCompare(b, 'th')),
+                nights: (v.checkInDate && v.checkOutDate) ? calculateNights(v.checkInDate, v.checkOutDate) : 1
+            }))
+            .sort((a,b) => (b.checkInDate || '').localeCompare(a.checkInDate || ''));
+        const rooms = [];
+        visits.forEach(v => v.rooms.forEach(r => { if(!rooms.includes(r)) rooms.push(r); }));
+        const { visitsMap, _nameDate, ...rest } = g;
+        return { ...rest, visits, rooms, totalVisits: visits.length, lastVisit: visits.length ? visits[0].checkInDate : '' };
+    }).sort((a,b) => (b.lastVisit || '').localeCompare(a.lastVisit || ''));
   }, [bookings]);
 
   const communicationData = useMemo(() => {
@@ -713,10 +739,13 @@ export default function App() {
 
   const handleGuestNameChange = (e) => {
     const val = e.target.value;
-    const match = guestDirectory.find(g => g.name === val);
-    setFormData(prev => ({ 
-        ...prev, 
-        guestName: val, 
+    // เติมข้อมูลอัตโนมัติเฉพาะเมื่อชื่อตรงกับลูกค้าเก่า "เพียงคนเดียว" เท่านั้น
+    // ถ้ามีลูกค้าชื่อซ้ำกันหลายคน จะไม่เดาเบอร์/ข้อมูลให้ เพื่อกันข้อมูลผิดคน
+    const matches = guestDirectory.filter(g => g.name === val);
+    const match = matches.length === 1 ? matches[0] : null;
+    setFormData(prev => ({
+        ...prev,
+        guestName: val,
         phone: match ? match.phone : prev.phone,
         licensePlate: match ? match.licensePlate : prev.licensePlate,
         idCard: match ? match.idCard : prev.idCard,
@@ -2207,6 +2236,7 @@ export default function App() {
                                     <th className="p-5 border-b border-slate-100">ข้อมูลติดต่อ</th>
                                     <th className="p-5 border-b border-slate-100">ข้อมูลรถ/บัตร</th>
                                     <th className="p-5 border-b border-slate-100">วันเกิด/อายุ</th>
+                                    <th className="p-5 border-b border-slate-100">ห้องที่เคยพัก</th>
                                     <th className="p-5 border-b border-slate-100 text-center">เข้าพัก (ครั้ง)</th>
                                     <th className="p-5 border-b border-slate-100 text-right">ล่าสุด</th>
                                 </tr>
@@ -2223,8 +2253,10 @@ export default function App() {
                                         (g.lineId && g.lineId.toLowerCase().includes(term))
                                     );
                                 }).map((guest, idx) => (
-                                    <tr key={idx} className="hover:bg-slate-50/50 transition-colors">
-                                        <td className="p-5 font-bold text-slate-700">{guest.name}</td>
+                                    <tr key={guest.key || idx} onClick={() => setHistoryCustomer(guest)} className="hover:bg-emerald-50/40 transition-colors cursor-pointer">
+                                        <td className="p-5 font-bold text-slate-700">
+                                            <div className="flex items-center gap-2">{guest.name}<ChevronRight size={14} className="text-slate-300"/></div>
+                                        </td>
                                         <td className="p-5 text-slate-600 font-mono">
                                             <div>{guest.phone || '-'}</div>
                                             {guest.lineId && <div className="text-xs text-[#06C755] font-bold mt-1 flex items-center gap-1"><MessageCircle size={10}/> {guest.lineId}</div>}
@@ -2237,15 +2269,25 @@ export default function App() {
                                             </div>
                                         </td>
                                         <td className="p-5">
-                                            {guest.dob ? 
-                                                <div className="flex items-center gap-2 text-slate-600"><Gift size={14} className="text-pink-400"/> {calculateAge(guest.dob)} ปี</div> 
+                                            {guest.dob ?
+                                                <div className="flex items-center gap-2 text-slate-600"><Gift size={14} className="text-pink-400"/> {calculateAge(guest.dob)} ปี</div>
                                                 : <span className="text-slate-300">-</span>
                                             }
+                                        </td>
+                                        <td className="p-5">
+                                            {guest.rooms.length > 0 ? (
+                                                <div className="flex flex-wrap gap-1 max-w-[220px]">
+                                                    {guest.rooms.slice(0, 4).map((r, ri) => (
+                                                        <span key={ri} className="text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-100 px-2 py-0.5 rounded-md whitespace-nowrap">{r}</span>
+                                                    ))}
+                                                    {guest.rooms.length > 4 && <span className="text-xs font-bold text-slate-400 px-1">+{guest.rooms.length - 4}</span>}
+                                                </div>
+                                            ) : <span className="text-slate-300">-</span>}
                                         </td>
                                         <td className="p-5 text-center">
                                             <span className="bg-emerald-100 text-emerald-700 py-1 px-3 rounded-full text-xs font-bold">{guest.totalVisits}</span>
                                         </td>
-                                        <td className="p-5 text-right text-slate-500">{guest.lastVisit}</td>
+                                        <td className="p-5 text-right text-slate-500 whitespace-nowrap">{guest.lastVisit ? formatThaiDate(guest.lastVisit, 'short') : '-'}</td>
                                     </tr>
                                 ))}
                             </tbody>
@@ -2255,6 +2297,40 @@ export default function App() {
                  </div>
              </div>
         )}
+
+        {/* Modal ประวัติการเข้าพักของลูกค้า */}
+        <Modal isOpen={!!historyCustomer} onClose={() => setHistoryCustomer(null)} title={`ประวัติการเข้าพัก — ${historyCustomer?.name || ''}`} maxWidth="max-w-xl">
+            {historyCustomer && (
+                <div className="space-y-4">
+                    <div className="flex flex-wrap gap-x-4 gap-y-2 text-sm bg-slate-50 rounded-2xl p-4 border border-slate-100">
+                        <div className="flex items-center gap-1.5 text-slate-600 font-medium"><Phone size={14} className="text-emerald-500"/> {historyCustomer.phone || '-'}</div>
+                        {historyCustomer.lineId && <div className="flex items-center gap-1.5 text-[#06C755] font-bold"><MessageCircle size={14}/> {historyCustomer.lineId}</div>}
+                        {historyCustomer.licensePlate && <div className="flex items-center gap-1.5 text-slate-600 font-medium"><Car size={14} className="text-slate-400"/> {historyCustomer.licensePlate}</div>}
+                        <div className="flex items-center gap-1.5 text-emerald-700 font-bold"><Calendar size={14}/> เข้าพักทั้งหมด {historyCustomer.totalVisits} ครั้ง</div>
+                    </div>
+                    <div className="space-y-2.5">
+                        {historyCustomer.visits.map((v, i) => (
+                            <div key={i} className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm">
+                                <div className="flex items-center justify-between mb-2 gap-2">
+                                    <span className="font-bold text-slate-700 flex items-center gap-2 text-sm">
+                                        <Calendar size={14} className="text-emerald-500 flex-shrink-0"/>
+                                        {formatThaiDate(v.checkInDate, 'full')}
+                                        {v.checkOutDate && v.checkOutDate !== v.checkInDate && <><ArrowRight size={12} className="text-slate-300"/>{formatThaiDate(v.checkOutDate, 'full')}</>}
+                                    </span>
+                                    <span className="text-xs text-slate-400 font-bold whitespace-nowrap flex-shrink-0">{v.nights} คืน · {v.rooms.length} ห้อง</span>
+                                </div>
+                                <div className="flex flex-wrap gap-1.5">
+                                    {v.rooms.map((r, ri) => (
+                                        <span key={ri} className="text-xs font-bold bg-emerald-100 text-emerald-700 px-2.5 py-1 rounded-lg">{r}</span>
+                                    ))}
+                                </div>
+                            </div>
+                        ))}
+                        {historyCustomer.visits.length === 0 && <div className="text-center text-slate-400 py-6">ยังไม่มีประวัติการเข้าพัก</div>}
+                    </div>
+                </div>
+            )}
+        </Modal>
 
         {currentView === 'expenses' && (
            <div className="space-y-6 animate-fade-in">
