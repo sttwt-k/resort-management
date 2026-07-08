@@ -2017,7 +2017,7 @@ export default function App() {
                     }
                 }
                 return (
-                  <div key={room.id} onClick={() => handleRoomClick(room, status, booking, 'dashboard')} className={`relative p-4 md:p-6 rounded-3xl cursor-pointer transition-all h-48 md:h-56 flex flex-col group select-none ${cardClass}`}>
+                  <div key={room.id} onClick={() => handleRoomClick(room, status, booking, 'dashboard')} className={`relative p-4 md:p-6 rounded-3xl cursor-pointer transition-all min-h-[12rem] md:min-h-[14rem] flex flex-col group select-none ${cardClass}`}>
                     {/* ปุ่มชั่วคราว — เฉพาะ owner + ห้องว่าง */}
                     {role === 'owner' && status === 'available' && (
                         <button
@@ -2031,8 +2031,8 @@ export default function App() {
                                  {isSelected && <CheckSquare size={14} className="text-white"/>}
                              </div>
                          )}
-                         <span className={`font-extrabold text-lg md:text-2xl text-slate-800 truncate flex-1 ${role === 'staff' ? 'pl-3' : ''}`}>{room.name}</span>
-                         <div className={`px-2 py-1 rounded-lg text-[10px] md:text-xs font-black tracking-wider uppercase z-10 flex-shrink-0 ${statusColor}`}>{statusLabel}</div>
+                         <span className={`font-extrabold text-lg md:text-2xl text-slate-800 whitespace-nowrap flex-shrink-0 ${role === 'staff' ? 'pl-3' : ''}`}>{room.name}</span>
+                         <div className={`px-2 py-1 rounded-lg text-[10px] md:text-xs font-black tracking-wider uppercase z-10 min-w-0 truncate ${statusColor}`}>{statusLabel}</div>
                      </div>
                     <div className="flex-1 flex flex-col items-center justify-center">
                       {status === 'available' ? (
