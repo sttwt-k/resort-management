@@ -1907,15 +1907,6 @@ export default function App() {
           </div>
 
           <div className="flex md:hidden items-center gap-1.5 min-w-0">
-              {role === 'staff' && selectedStaffRooms.length > 0 && (
-                  <div className="flex items-center gap-1 bg-emerald-50 border border-emerald-200 px-1.5 py-1 rounded-xl animate-fade-in shadow-sm">
-                      <span className="font-black text-emerald-700 px-1 text-xs">{selectedStaffRooms.length}</span>
-                      <button onClick={() => handleStaffBulkAction('checkin')} className="bg-emerald-600 text-white w-9 h-8 rounded-lg font-bold shadow-md hover:bg-emerald-700 active:scale-95 transition-all flex items-center justify-center"><LogIn size={15}/></button>
-                      <button onClick={() => { if(selectedStaffRooms.length === 1){ const r = rooms.find(x => x.id === selectedStaffRooms[0]); if(r){ openTempModal(r); setSelectedStaffRooms([]); } } else showNotification('เลือก 1 ห้อง', 'error'); }} className="bg-amber-500 text-white w-9 h-8 rounded-lg font-bold hover:bg-amber-600 active:scale-95 transition-all flex items-center justify-center"><Clock size={15}/></button>
-                      <button onClick={() => handleStaffBulkAction('checkout')} className="bg-white border border-red-200 text-red-500 w-9 h-8 rounded-lg font-bold hover:bg-red-50 active:scale-95 transition-all flex items-center justify-center"><LogOut size={15}/></button>
-                      <button onClick={() => setSelectedStaffRooms([])} className="w-7 h-7 text-slate-400 hover:text-slate-600 bg-white rounded-full shadow-sm flex items-center justify-center"><X size={14}/></button>
-                  </div>
-              )}
               <button onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)} className="p-2.5 bg-white border border-slate-200 rounded-xl text-slate-600 hover:text-emerald-600 shadow-sm active:scale-95 transition-all flex-shrink-0">
                 {isMobileMenuOpen ? <X size={22}/> : <Menu size={22}/>}
               </button>
@@ -1948,6 +1939,22 @@ export default function App() {
             </div>
         )}
       </header>
+
+      {/* แถบปุ่มลอยกลางจอด้านล่าง (มือถือ) — แสดงเมื่อเลือกห้องในโหมดพนักงาน */}
+      {role === 'staff' && selectedStaffRooms.length > 0 && (
+          <div className="md:hidden fixed inset-x-0 bottom-0 z-[60] flex justify-center px-3 pointer-events-none" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 12px)' }}>
+              <div className="pointer-events-auto flex items-center gap-2 bg-white/95 backdrop-blur-md border border-emerald-100 rounded-2xl shadow-2xl shadow-emerald-900/10 px-2.5 py-2 animate-fade-in max-w-full">
+                  <span className="flex-shrink-0 flex flex-col items-center leading-none text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-xl px-2 py-1.5">
+                      <span className="font-black text-lg">{selectedStaffRooms.length}</span>
+                      <span className="text-[10px] font-bold">ห้อง</span>
+                  </span>
+                  <button onClick={() => handleStaffBulkAction('checkin')} className="flex flex-col items-center justify-center gap-0.5 bg-emerald-600 text-white px-3 py-2 rounded-xl font-bold shadow-md hover:bg-emerald-700 active:scale-95 transition-all whitespace-nowrap"><LogIn size={18}/> <span className="text-xs">เช็คอิน</span></button>
+                  <button onClick={() => { if(selectedStaffRooms.length === 1){ const r = rooms.find(x => x.id === selectedStaffRooms[0]); if(r){ openTempModal(r); setSelectedStaffRooms([]); } } else showNotification('เลือก 1 ห้องสำหรับลูกค้าชั่วคราว', 'error'); }} className="flex flex-col items-center justify-center gap-0.5 bg-amber-500 text-white px-3 py-2 rounded-xl font-bold shadow-md hover:bg-amber-600 active:scale-95 transition-all whitespace-nowrap"><Clock size={18}/> <span className="text-xs">ชั่วคราว</span></button>
+                  <button onClick={() => handleStaffBulkAction('checkout')} className="flex flex-col items-center justify-center gap-0.5 bg-white border border-red-200 text-red-600 px-3 py-2 rounded-xl font-bold hover:bg-red-50 active:scale-95 transition-all whitespace-nowrap"><LogOut size={18}/> <span className="text-xs">คืนห้อง</span></button>
+                  <button onClick={() => setSelectedStaffRooms([])} className="flex-shrink-0 w-9 h-9 text-slate-400 hover:text-slate-600 bg-slate-50 rounded-full shadow-sm flex items-center justify-center active:scale-95 transition-all"><X size={18}/></button>
+              </div>
+          </div>
+      )}
 
       <div className="container mx-auto p-3 md:p-6">
         {currentView === 'dashboard' && (
@@ -1983,7 +1990,7 @@ export default function App() {
                {role === 'owner' && <button onClick={openLineReport} className="bg-[#06C755] text-white px-4 py-2.5 rounded-xl shadow-lg shadow-green-100 text-sm font-bold flex items-center justify-center gap-1 hover:bg-[#05b54d] transition-transform transform active:scale-95"><MessageSquare size={18}/><span className="hidden md:inline"> สรุป LINE</span></button>}
             </div>
 
-            <div className={`grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 md:gap-6 ${role === 'staff' ? 'pb-10' : ''}`}>
+            <div className={`grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 md:gap-6 ${role === 'staff' ? (selectedStaffRooms.length > 0 ? 'pb-32 md:pb-10' : 'pb-10') : ''}`}>
               {rooms.map((room) => {
                 const { status, booking } = checkRoomStatus(room.id, selectedDate, false);
                 let cardClass = "bg-white border-2 border-white hover:border-emerald-300 shadow-sm";
