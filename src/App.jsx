@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { auth, db, storage, appId } from './lib/firebase';
 import { signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import {
-  collection, addDoc, query, onSnapshot, doc, updateDoc, deleteDoc, Timestamp, setDoc,
+  collection, addDoc, query, onSnapshot, doc, updateDoc, deleteDoc, Timestamp, setDoc, writeBatch,
 } from 'firebase/firestore';
 import { ref as storageRef, deleteObject } from 'firebase/storage';
 import { Modal, ConfirmModal } from './components/Modal';
@@ -486,7 +486,7 @@ export default function App() {
   };
 
   const calculateGroupFinancials = () => {
-     const targetBookings = formData.groupCheckInRooms.length > 0 ? bookings.filter(b => formData.groupCheckInRooms.includes(b.id)) : [];
+     const targetBookings = formData.groupCheckInRooms.length > 0 ? bookings.filter(b => formData.groupCheckInRooms.includes(b.id) && b.status !== 'cancelled') : [];
      let grandTotalRoomPrice = 0;
      let grandTotalDeposit = 0;
      let previousTotalPaid = 0;
@@ -908,22 +908,114 @@ export default function App() {
          const bookingsToRemove = originalGroupRoomBookings.filter(b => !finalRoomIds.includes(b.roomId));
          const bookingsToKeep = originalGroupRoomBookings.filter(b => finalRoomIds.includes(b.roomId));
 
-         if (roomsToAdd.length > 0) {
-             const depositDocNo = formData.docNo;
-             const batchPromises = roomsToAdd.map((rId) => {
-                const rConfig = rooms.find(r => r.id === rId);
-                return addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'bookings'), {
-                    ...commonData, roomId: rConfig.id, roomName: rConfig.name, roomPrice: rConfig.price,
-                    totalPrice: rConfig.price * nights, deposit: 0,
-                    docNo: depositDocNo, checkInDocNo: '', status: 'booked', createdAt: Timestamp.now(),
-                    keyDeposit: 0, extraBedPrice: 0, totalPaid: 0, paymentMethod: 'เงินสด'
-                });
-             });
-             await Promise.all(batchPromises);
-         }
+         // Room-change (swap) detection: exactly one room vacated and exactly one room taken
+         // in this save is the well-defined 1:1 case (covers a single-room booking moved to a
+         // different room, and swapping one room within a larger group). Per Kay's 2026-08-18
+         // confirmed rules: the vacated room's full deposit AND its docNo move onto the new
+         // room's record (no new docNo is minted here — depositDocNo below already reuses
+         // formData.docNo); the vacated room's own booking is marked cancelled and KEPT (not
+         // deleted) with deposit zeroed and docNo cleared, so the docNo lives on exactly one
+         // live record. Any other shape (a pure "add extra room" with nothing removed, a pure
+         // drop with nothing added, or an N:M swap with N,M > 1) has no defined 1:1 pairing for
+         // where a given vacated room's deposit should go -- left as-is and flagged; see
+         // completion report "Edge cases / follow-ups".
+         const isSingleRoomSwap = roomsToAdd.length === 1 && bookingsToRemove.length === 1;
 
-         if (bookingsToRemove.length > 0) {
-             await Promise.all(bookingsToRemove.map(b => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', b.id))));
+         // Carragher review 2026-08-18, Critical 1: the add and the cancel used to be two
+         // separate un-transacted Promise.all() calls, so a failure between them could leave
+         // both the new room and the vacated room live with the same docNo/status, double
+         // counting the deposit. Both halves are now committed as a single atomic writeBatch:
+         // either both land or neither does. The new room's doc ref is minted client-side via
+         // doc(collection(...)) so it can be batch.set() instead of addDoc(); the removal is
+         // batch.update(). This covers the non-1:1 removal path too, not only the 1:1 swap --
+         // both branches below are queued onto the same `batch` and committed together.
+         if (roomsToAdd.length > 0 || bookingsToRemove.length > 0) {
+             const batch = writeBatch(db);
+             // Only ever set when isSingleRoomSwap (exactly one new room to link a cancelled
+             // record to); stays null for any other shape, where no 1:1 target exists.
+             let swapTargetRoomDocId = null;
+
+             if (roomsToAdd.length > 0) {
+                 const depositDocNo = formData.docNo;
+                 roomsToAdd.forEach((rId) => {
+                    const rConfig = rooms.find(r => r.id === rId);
+                    // Kay's decision 5 (2026-08-18, scoped 2026-08-19 per Carragher Round 2
+                    // Critical): the value that moves to the new room is the VACATED room's own
+                    // stored deposit. formData.deposit ("the owner's typed value wins") applies
+                    // only to the room the modal was actually opened on -- not to every removed
+                    // room in a group swap. So: when the removed room IS the room the modal was
+                    // opened on (bookingsToRemove[0].id === formData.id -- true for every
+                    // single-room booking swap, and for a group swap where the owner clicked the
+                    // room being removed), formData.deposit is the owner's live edit and wins,
+                    // preserving Critical 2 (a same-save deposit top-up while moving rooms must
+                    // land in Firestore). When the removed room is a *different* room than the
+                    // one the modal was opened on (owner clicked a room that stays, swapped out a
+                    // sibling), that sibling's own stored deposit moves -- formData.deposit
+                    // belongs to the clicked room, not to it, and reusing it here duplicated the
+                    // clicked room's deposit while discarding the sibling's (Carragher Round 2
+                    // Critical: signed error, inflates the group total, resort under-collects).
+                    // This is the exact same value passed to generateBookingSummary below for the
+                    // room the modal was opened on, so the Firestore write and the on-screen
+                    // summary can never disagree for that room.
+                    // Deposit carry-over only applies to the well-defined 1:1 swap (see note
+                    // above); the historical deposit:0 behavior is kept for a plain "add an
+                    // extra room" to a group, since there is no specific vacated room's deposit
+                    // to move in that case.
+                    const carriedDeposit = isSingleRoomSwap
+                        ? (bookingsToRemove[0].id === formData.id
+                            ? (Number(formData.deposit) || 0)
+                            : (Number(bookingsToRemove[0].deposit) || 0))
+                        : 0;
+                    const newRoomRef = doc(collection(db, 'artifacts', appId, 'public', 'data', 'bookings'));
+                    if (isSingleRoomSwap) swapTargetRoomDocId = newRoomRef.id;
+                    batch.set(newRoomRef, {
+                        ...commonData, roomId: rConfig.id, roomName: rConfig.name, roomPrice: rConfig.price,
+                        totalPrice: rConfig.price * nights, deposit: carriedDeposit,
+                        docNo: depositDocNo, checkInDocNo: '', status: 'booked', createdAt: Timestamp.now(),
+                        keyDeposit: 0, extraBedPrice: 0, totalPaid: 0, paymentMethod: 'เงินสด'
+                    });
+                 });
+             }
+
+             if (bookingsToRemove.length > 0) {
+                 // Cancel-and-keep, not delete: isRoomAvailable/checkRoomStatus already exclude
+                 // status:'cancelled', so the room frees up immediately; the record survives for
+                 // audit/history (Kay's rule 2). Historical fields (guestName, dates, roomPrice,
+                 // etc.) are intentionally left untouched -- commonData is NOT spread here -- so
+                 // the cancelled record still shows what was originally booked, not the
+                 // post-edit values.
+                 // Carragher review Major finding: erasing deposit/docNo outright destroyed the
+                 // two fields an audit most needs. Both are now relocated to originalDeposit /
+                 // originalDocNo before being cleared, on EVERY removal in this save (not just
+                 // the 1:1 swap), so the two shapes produce equally faithful audit records.
+                 // Clearing docNo is safe (no sequence reuse hazard, per Carragher's Minor
+                 // finding on generateSequentialDocNo): in the 1:1 swap it now lives on
+                 // swapTargetRoomDocId's record (same batch, so it's guaranteed to land
+                 // together or not at all); in any other removal shape reachable from this save,
+                 // the removed room was part of a multi-room group and at least one kept
+                 // sibling still carries the same shared group docNo, so the max-scan in
+                 // generateSequentialDocNo still sees it. cancelledReason marks why;
+                 // movedToRoomId links to the new room only when isSingleRoomSwap gives an
+                 // unambiguous 1:1 target.
+                 // updatedAt uses Timestamp.now() (client clock) to match this file's one
+                 // existing convention throughout (no serverTimestamp() import exists in this
+                 // codebase).
+                 bookingsToRemove.forEach(b => {
+                     batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', b.id), {
+                         status: 'cancelled',
+                         originalDeposit: Number(b.deposit) || 0,
+                         originalDocNo: b.docNo || '',
+                         deposit: 0,
+                         docNo: '',
+                         cancelledReason: 'room-change',
+                         movedToRoomId: isSingleRoomSwap ? swapTargetRoomDocId : null,
+                         updatedAt: Timestamp.now(),
+                         updatedBy: user.uid
+                     });
+                 });
+             }
+
+             await batch.commit();
          }
 
          // อัปเดตห้องหลัก (เฉพาะกรณีที่ห้องเดิมยังอยู่ในรายการที่เลือก ไม่ได้ถูกสลับออกไป)
@@ -1141,15 +1233,27 @@ export default function App() {
   };
 
   const handleDeleteBooking = () => {
+      // Kay's decision 6 (2026-08-18): cancel-and-keep, same mechanism as the room-swap path --
+      // nothing is ever destroyed. Unlike the swap path, there is no replacement room for this
+      // deposit/docNo to move to, so both stay on the record untouched (not zeroed/relocated):
+      // zeroing here would erase the exact audit info rule 2 exists to preserve, and clearing
+      // docNo without a guaranteed elsewhere-preservation (Carragher's Minor finding) would risk
+      // a future sequence-number reuse. Room availability still frees immediately --
+      // isRoomAvailable/checkRoomStatus already exclude status:'cancelled'.
       showConfirm({
           title: 'ยกเลิกการจอง',
-          message: 'ต้องการยกเลิกการจองนี้หรือไม่?\nข้อมูลจะถูกลบถาวร',
+          message: 'ต้องการยกเลิกการจองนี้หรือไม่?\nห้องจะว่างทันที ข้อมูลจะถูกเก็บไว้เป็นประวัติการจอง (ไม่ถูกลบถาวร)',
           confirmLabel: 'ยกเลิกการจอง',
           variant: 'danger',
           onConfirm: async () => {
               if (useMockData) { showNotification('โหมดตัวอย่าง: ยกเลิกสำเร็จ'); setIsBookingModalOpen(false); return; }
               try {
-                  await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', formData.id));
+                  await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', formData.id), {
+                      status: 'cancelled',
+                      cancelledReason: 'manual-cancel',
+                      updatedAt: Timestamp.now(),
+                      updatedBy: user.uid
+                  });
                   setIsBookingModalOpen(false); showNotification("ยกเลิกการจองสำเร็จ");
               } catch (error) { showNotification("เกิดข้อผิดพลาด", "error"); }
           }

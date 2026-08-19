@@ -35,7 +35,15 @@ service cloud.firestore {
           .affectedKeys().hasOnly(['cleaningStatus', 'maintenanceNote']));
     }
 
-    // BOOKINGS — staff: read + create + update (operational fields only); owner: full + delete
+    // BOOKINGS — staff: read + create + update (operational fields only, cancel excluded);
+    // owner: full + delete. Kay's decision 2026-08-19: only the owner may cancel a booking.
+    // Before the room-change/cancel-and-keep feature, "cancel" was hard-delete, and delete: if
+    // isOwner() already restricted it to the owner. Cancel is now a field write (status:
+    // 'cancelled') instead of a delete, so it must be excluded from the operational-fields
+    // allowance below by name -- the pre-existing money-field check does not catch it, since
+    // handleDeleteBooking's manual-cancel write touches only status/cancelledReason/updatedAt/
+    // updatedBy, none of which were in the restricted list. Covers both cancel paths in the app:
+    // the room-change cancel-and-keep batch write and the manual "ยกเลิกการจอง" button.
     match /artifacts/{appId}/public/data/bookings/{docId} {
       allow read: if isAuthenticated();
       allow create: if isAuthenticated();
@@ -43,7 +51,8 @@ service cloud.firestore {
       allow update: if isOwner() ||
         (isAuthenticated() && !request.resource.data.diff(resource.data)
           .affectedKeys().hasAny(['totalPrice', 'discount', 'roomPrice',
-                                  'extraBedPrice', 'deposit']));
+                                  'extraBedPrice', 'deposit']) &&
+          request.resource.data.status != 'cancelled');
     }
 
     // EXPENSES — owner only
