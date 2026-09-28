@@ -13,8 +13,7 @@ service cloud.firestore {
     // =====================================================
 
     function isOwner() {
-      return isAuthenticated() &&
-        exists(/databases/$(database)/documents/artifacts/my-resort-app-v1/public/data/ownerSessions/$(request.auth.uid));
+      return isAuthenticated() && request.auth.uid == 'UuSyhl057OdUcvznOgsrq1lHhct2';
     }
 
     function isAuthenticated() {
@@ -35,24 +34,11 @@ service cloud.firestore {
           .affectedKeys().hasOnly(['cleaningStatus', 'maintenanceNote']));
     }
 
-    // BOOKINGS — staff: read + create + update (operational fields only, cancel excluded);
-    // owner: full + delete. Kay's decision 2026-08-19: only the owner may cancel a booking.
-    // Before the room-change/cancel-and-keep feature, "cancel" was hard-delete, and delete: if
-    // isOwner() already restricted it to the owner. Cancel is now a field write (status:
-    // 'cancelled') instead of a delete, so it must be excluded from the operational-fields
-    // allowance below by name -- the pre-existing money-field check does not catch it, since
-    // handleDeleteBooking's manual-cancel write touches only status/cancelledReason/updatedAt/
-    // updatedBy, none of which were in the restricted list. Covers both cancel paths in the app:
-    // the room-change cancel-and-keep batch write and the manual "ยกเลิกการจอง" button.
+    // BOOKINGS — reads remain available to staff; all writes go through the
+    // authenticated server endpoint, which checks every affected room atomically.
     match /artifacts/{appId}/public/data/bookings/{docId} {
       allow read: if isAuthenticated();
-      allow create: if isAuthenticated();
-      allow delete: if isOwner();
-      allow update: if isOwner() ||
-        (isAuthenticated() && !request.resource.data.diff(resource.data)
-          .affectedKeys().hasAny(['totalPrice', 'discount', 'roomPrice',
-                                  'extraBedPrice', 'deposit']) &&
-          request.resource.data.status != 'cancelled');
+      allow create, update, delete: if false;
     }
 
     // EXPENSES — owner only
@@ -69,10 +55,9 @@ service cloud.firestore {
           .affectedKeys().hasOnly(['roomStock', 'stockQty']));
     }
 
-    // OWNER SESSIONS — anonymous UID marked as owner after PIN verification
+    // Legacy owner sessions cannot grant privileges.
     match /artifacts/{appId}/public/data/ownerSessions/{uid} {
-      allow read: if isAuthenticated();
-      allow write, delete: if isAuthenticated() && request.auth.uid == uid;
+      allow read, write: if false;
     }
 
     // CONSUMABLE LOGS — staff read + create; owner full; no staff delete (logs are immutable)

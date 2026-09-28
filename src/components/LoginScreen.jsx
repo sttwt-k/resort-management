@@ -5,15 +5,20 @@ export const LoginScreen = ({ onLogin }) => {
     const [pin, setPin] = useState('');
     const [error, setError] = useState('');
     const [showOwnerInput, setShowOwnerInput] = useState(false);
+    const [isSubmitting, setIsSubmitting] = useState(false);
 
-    const handleOwnerLogin = (e) => {
+    const handleOwnerLogin = async (e) => {
         e.preventDefault();
-        if (pin === import.meta.env.VITE_OWNER_PIN) {
-            onLogin('owner');
-        } else {
-            setError('รหัสไม่ถูกต้อง');
-            setPin('');
+        if (!/^\d{6}$/.test(pin)) {
+            setError('กรุณาใส่ PIN 6 หลัก');
+            return;
         }
+        setIsSubmitting(true);
+        setError('');
+        const signedIn = await onLogin('owner', pin);
+        setPin('');
+        if (!signedIn) setError('PIN ไม่ถูกต้อง หรือเชื่อมต่อไม่ได้');
+        setIsSubmitting(false);
     };
 
     const handleClose = () => {
@@ -83,16 +88,19 @@ export const LoginScreen = ({ onLogin }) => {
                                 <form onSubmit={handleOwnerLogin} className="space-y-3">
                                     <input
                                         type="password"
+                                        maxLength={6}
+                                        autoComplete="off"
                                         placeholder="ใส่รหัส PIN"
                                         inputMode="numeric"
                                         className="w-full p-3 border-0 bg-white rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 shadow-inner text-slate-700 placeholder:text-slate-300 outline-none transition-all text-center tracking-widest text-lg"
                                         value={pin}
                                         autoFocus
-                                        onChange={(e) => { setPin(e.target.value); setError(''); }}
+                                        onChange={(e) => { setPin(e.target.value.replace(/\D/g, '')); setError(''); }}
                                     />
                                     {error && <p className="text-red-500 text-xs text-center font-medium bg-red-50 py-1 rounded-lg">{error}</p>}
                                     <button
                                         type="submit"
+                                        disabled={isSubmitting}
                                         className="w-full py-3 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700 shadow-lg shadow-emerald-200 transition-all transform active:scale-95"
                                     >
                                         เข้าสู่ระบบ

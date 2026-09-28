@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { auth, db, storage, appId } from './lib/firebase';
-import { signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import { auth, db, storage, appId, ownerUid, ownerEmail } from './lib/firebase';
+import { signInAnonymously, signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
 import {
-  collection, addDoc, query, onSnapshot, doc, updateDoc, deleteDoc, Timestamp, setDoc, writeBatch,
+  collection, addDoc, query, onSnapshot, doc, updateDoc, deleteDoc, Timestamp, setDoc,
 } from 'firebase/firestore';
+import { BookingConflictError, commitBookingMutations } from './lib/bookingReservations';
+import { getLineGroup, startLinePairing, sendLineSummary } from './lib/lineGroup';
 import { ref as storageRef, deleteObject } from 'firebase/storage';
 import { Modal, ConfirmModal } from './components/Modal';
 import { LoginScreen } from './components/LoginScreen';
@@ -94,16 +96,25 @@ const CustomDailyTooltip = ({ active, payload, label }) => {
     return null;
 };
 
+const todayInThailand = (date = new Date()) => {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(date);
+  const value = (type) => parts.find(part => part.type === type)?.value;
+  return `${value('year')}-${value('month')}-${value('day')}`;
+};
+
 export default function App() {
   const [user, setUser] = useState(null);
-  const [role, setRole] = useState(null); 
+  const [role, setRole] = useState(() => new URLSearchParams(window.location.search).get('staff') === '1' ? 'staff' : null);
   const [useMockData, setUseMockData] = useState(false);
 
   const [rooms, setRooms] = useState([]);
   const [bookings, setBookings] = useState([]);
+  const [bookingsReady, setBookingsReady] = useState(false);
   const [expenses, setExpenses] = useState([]);
   const [currentView, setCurrentView] = useState('dashboard');
-  const [selectedDate, setSelectedDate] = useState(formatDate(new Date()));
+  const [selectedDate, setSelectedDate] = useState(todayInThailand);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
     
   const [selectedRoom, setSelectedRoom] = useState(null);
@@ -131,6 +142,10 @@ export default function App() {
 
   const [isLineModalOpen, setIsLineModalOpen] = useState(false);
   const [lineMessage, setLineMessage] = useState('');
+  const [isLineGroupModalOpen, setIsLineGroupModalOpen] = useState(false);
+  const [lineGroupStatus, setLineGroupStatus] = useState(null);
+  const [linePairCode, setLinePairCode] = useState('');
+  const [lineGroupBusy, setLineGroupBusy] = useState(false);
   const [isBookingSummaryOpen, setIsBookingSummaryOpen] = useState(false);
   const [bookingSummaryText, setBookingSummaryText] = useState('');
 
@@ -174,7 +189,7 @@ export default function App() {
   };
   const [formData, setFormData] = useState(initialBookingForm);
 
-  const initialExpenseForm = { docNo: '', title: '', amount: '', category: 'ของใช้สิ้นเปลือง (สบู่/ทิชชู่)', date: formatDate(new Date()), note: '', payee: '', paymentMethod: 'เงินสด', customCategory: '' };
+  const initialExpenseForm = useMemo(() => ({ docNo: '', title: '', amount: '', category: 'ของใช้สิ้นเปลือง (สบู่/ทิชชู่)', date: formatDate(new Date()), note: '', payee: '', paymentMethod: 'เงินสด', customCategory: '' }), []);
   const [expenseForm, setExpenseForm] = useState(initialExpenseForm);
   const [isExpenseModalOpen, setIsExpenseModalOpen] = useState(false);
   // ── Consumables / Stock ──
@@ -286,67 +301,77 @@ export default function App() {
   // --- Auth & Data ---
   useEffect(() => {
     let isMounted = true;
-    const initAuth = async () => {
+    const unsubscribe = onAuthStateChanged(auth, async (u) => {
+      if (!isMounted) return;
+      if (u) {
+        if (u.uid === ownerUid && new URLSearchParams(window.location.search).get('staff') === '1') {
+          await signOut(auth);
+          return;
+        }
+        setUser(u);
+        setUseMockData(false);
+        setLoading(false);
+        if (u.uid !== ownerUid) {
+          setRole(currentRole => currentRole === 'owner' ? null : currentRole);
+          setCurrentView('dashboard');
+          setIsExpenseModalOpen(false);
+          setExpenseForm(initialExpenseForm);
+        }
+        return;
+      }
+      setUser(null);
+      setRole(currentRole => currentRole === 'owner' ? null : currentRole);
+      setCurrentView('dashboard');
+      setIsExpenseModalOpen(false);
+      setExpenseForm(initialExpenseForm);
+      setBookingsReady(false);
       try {
         await signInAnonymously(auth);
       } catch (error) {
-        if (isMounted) {
-            const isBlocked = error.code === 'auth/requests-from-referer-blocked' || error.message.includes('blocked');
-            if (isBlocked) {
-                 console.warn("Firebase Auth blocked in Preview environment. Switching to Demo Mode.");
-            } else {
-                 console.error("Authentication Error:", error);
-            }
-            setUseMockData(true);
-            setUser({ uid: 'mock-user', isAnonymous: true });
-            setLoading(false);
-            if (!notification) {
-                showNotification('เชื่อมต่อ Firebase ไม่ได้ (ติดสิทธิ์ Domain) - สลับใช้โหมดจำลองข้อมูล', 'error');
-            }
-        }
+        if (!isMounted) return;
+        console.error('Authentication Error:', error);
+        setUseMockData(true);
+        setUser({ uid: 'mock-user', isAnonymous: true });
+        setLoading(false);
+        showNotification('เชื่อมต่อ Firebase ไม่ได้ - สลับใช้โหมดจำลองข้อมูล', 'error');
       }
-    };
-    
-    initAuth();
-    
-    const unsubscribe = onAuthStateChanged(auth, (u) => {
-        if (isMounted) {
-            if (u) {
-                setUser(u);
-                setUseMockData(false);
-                setLoading(false);
-            }
-        }
     });
 
     return () => {
         isMounted = false;
         unsubscribe();
     };
-  }, []);
+  }, [initialExpenseForm]);
 
-  const handleLogin = async (newRole) => {
-    setRole(newRole);
-    if (newRole === 'owner' && user) {
-      try {
-        await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'ownerSessions', user.uid), {
-          loginAt: Timestamp.now(),
-        });
-      } catch (e) {
-        console.error('Failed to write owner session:', e);
+  const handleLogin = async (newRole, pin) => {
+    if (newRole === 'staff') {
+      setRole('staff');
+      return true;
+    }
+    if (useMockData) return false;
+    try {
+      const credential = await signInWithEmailAndPassword(auth, ownerEmail, pin);
+      if (credential.user.uid !== ownerUid) {
+        await signOut(auth);
+        return false;
       }
+      setRole('owner');
+      return true;
+    } catch (error) {
+      console.error('Owner sign-in failed:', error.code);
+      return false;
     }
   };
 
   const handleLogout = async () => {
-    if (role === 'owner' && user) {
-      try {
-        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'ownerSessions', user.uid));
-      } catch (e) {
-        console.error('Failed to delete owner session:', e);
-      }
-    }
     setRole(null);
+    setCurrentView('dashboard');
+    setExpenses([]);
+    setPayeeHistory([]);
+    setDynamicCategories(DEFAULT_EXPENSE_CATEGORIES);
+    setIsExpenseModalOpen(false);
+    setExpenseForm(initialExpenseForm);
+    if (auth.currentUser?.uid === ownerUid) await signOut(auth);
   };
 
   useEffect(() => {
@@ -356,14 +381,14 @@ export default function App() {
             { id: 'm1', roomId: '1', roomName: 'บ้าน 1', guestName: 'คุณสมชาย (ตัวอย่าง)', checkInDate: formatDate(new Date()), checkOutDate: addDays(formatDate(new Date()), 1), status: 'occupied', totalPrice: 500, deposit: 0, totalPaid: 0, paymentMethod: 'เงินโอน' },
             { id: 'm2', roomId: '3', roomName: 'บ้าน 3', guestName: 'คุณสมหญิง (ตัวอย่าง)', checkInDate: addDays(formatDate(new Date()), 1), checkOutDate: addDays(formatDate(new Date()), 2), status: 'booked', totalPrice: 700, deposit: 300, totalPaid: 0, paymentMethod: 'เงินสด' }
         ]);
-        setExpenses([
-             { id: 'e1', title: 'ซื้อน้ำดื่ม', amount: 50, category: 'น้ำดื่ม', date: formatDate(new Date()), docNo: 'EX-Mock-001', payee: '7-11', paymentMethod: 'เงินสด' }
-        ]);
+        setExpenses([]);
+        setBookingsReady(true);
         setLoading(false);
         return;
     }
 
-    if (!user) return;
+    if (!user) { setBookingsReady(false); return; }
+    setBookingsReady(false);
     
     const qRooms = query(collection(db, 'artifacts', appId, 'public', 'data', 'rooms'));
     const unsubRooms = onSnapshot(qRooms, 
@@ -385,21 +410,32 @@ export default function App() {
     );
 
     const qBookings = query(collection(db, 'artifacts', appId, 'public', 'data', 'bookings'));
-    const unsubBookings = onSnapshot(qBookings, 
-        (snapshot) => setBookings(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))),
-        (error) => console.error("Error fetching bookings:", error)
+    const unsubBookings = onSnapshot(qBookings, { includeMetadataChanges: true },
+        (snapshot) => {
+          setBookings(snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id })));
+          setBookingsReady(!snapshot.metadata.fromCache);
+        },
+        (error) => {
+          setBookingsReady(false);
+          console.error('Error fetching bookings:', error);
+        }
     );
 
-    const qExpenses = query(collection(db, 'artifacts', appId, 'public', 'data', 'expenses'));
-    const unsubExpenses = onSnapshot(qExpenses, 
-        (snapshot) => {
+    if (role !== 'owner' || user.uid !== ownerUid) {
+      setExpenses([]);
+      setPayeeHistory([]);
+      setDynamicCategories(DEFAULT_EXPENSE_CATEGORIES);
+    }
+    const unsubExpenses = role === 'owner' && user.uid === ownerUid
+      ? onSnapshot(query(collection(db, 'artifacts', appId, 'public', 'data', 'expenses')),
+          (snapshot) => {
             const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             setExpenses(docs);
             setPayeeHistory([...new Set(docs.map(d => d.payee).filter(Boolean))]);
             setDynamicCategories([...new Set([...DEFAULT_EXPENSE_CATEGORIES, ...docs.map(d => d.category).filter(Boolean)])]);
-        },
-        (error) => console.error("Error fetching expenses:", error)
-    );
+          },
+          (error) => console.error('Error fetching expenses:', error))
+      : () => {};
 
     const qConsumables = query(collection(db, 'artifacts', appId, 'public', 'data', 'consumables'));
     const unsubConsumables = onSnapshot(qConsumables, snap => setConsumables(snap.docs.map(d => ({id: d.id, ...d.data()}))));
@@ -422,12 +458,25 @@ export default function App() {
     });
 
     return () => { unsubRooms(); unsubBookings(); unsubExpenses(); unsubConsumables(); unsubConsumableLogs(); unsubCategories(); };
-  }, [user, useMockData]);
+  }, [user, useMockData, role]);
 
   const showNotification = (msg, type = 'success') => { setNotification({ message: msg, type }); setTimeout(() => setNotification(null), 3000); };
   const showConfirm = (options) => setConfirmDialog(options);
 
   // --- Logic ---
+  const bookingUpdate = (id, data) => {
+    const existing = bookings.find(booking => booking.id === id);
+    if (!existing) throw new BookingConflictError();
+    return {
+      mode: 'update', ref: doc(db, 'artifacts', appId, 'public', 'data', 'bookings', id), data,
+      expected: {
+        status: existing.status, roomId: existing.roomId,
+        checkInDate: existing.checkInDate, checkOutDate: existing.checkOutDate,
+        updatedAt: existing.updatedAt?.toMillis?.() ?? null,
+      },
+    };
+  };
+
   const isRoomAvailable = (roomId, start, end, excludeBookingId = null) => {
     const s = new Date(start).getTime();
     const e = new Date(end).getTime();
@@ -436,14 +485,14 @@ export default function App() {
         if (b.roomId !== roomId) return false;
         if (b.status === 'cancelled' || b.status === 'checked-out') return false;
         const bStart = new Date(b.checkInDate).getTime();
-        const bEnd = new Date(b.checkOutDate).getTime();
+        const bEnd = new Date(b.status === 'temporary' ? addDays(b.checkOutDate, 1) : b.checkOutDate).getTime();
         return s < bEnd && e > bStart;
     });
   };
 
   const checkRoomStatus = (roomId, date, includeCheckedOut = true) => {
     const targetTime = new Date(date).getTime();
-    const todayTime = new Date(formatDate(new Date())).getTime();
+    const todayTime = new Date(todayInThailand()).getTime();
     
     const relevantBookings = bookings.filter(b => b.roomId === roomId && b.status !== 'cancelled');
 
@@ -452,7 +501,7 @@ export default function App() {
       if (b.checkInDate === date) return true;
       const start = new Date(b.checkInDate).getTime();
       const end = new Date(b.checkOutDate).getTime();
-      return (targetTime >= start && targetTime < end) || (targetTime >= end && targetTime <= todayTime);
+      return (targetTime >= start && targetTime <= end) || (targetTime > end && targetTime <= todayTime);
     });
     if (temporary) return { status: 'temporary', booking: temporary };
     
@@ -544,7 +593,7 @@ export default function App() {
                   setSelectedStaffRooms(prev => [...prev, room.id]);
               }
           }
-          if (status === 'occupied') {
+          if (status === 'occupied' || status === 'temporary') {
               if (selectedStaffRooms.includes(room.id)) {
                   setSelectedStaffRooms(prev => prev.filter(id => id !== room.id));
               } else {
@@ -605,29 +654,35 @@ export default function App() {
       });
   };
 
+  const startStaffCheckIn = (roomIds) => {
+      if (roomIds.length === 0) return;
+      setSelectedStaffRooms(roomIds);
+      let total = 0;
+      roomIds.forEach(rId => {
+          const room = rooms.find(r => r.id === rId);
+          const { status } = checkRoomStatus(rId, selectedDate, true);
+          if (status !== 'occupied' && status !== 'booked') {
+              total += room.price;
+          }
+      });
+      setStaffCheckInForm({
+          guestName: '',
+          phone: '',
+          totalPrice: total,
+          nights: 1,
+          paymentMethod: 'เงินสด',
+          isReceiptNeeded: false,
+          keyDepositCollected: false,
+          billPhoto: null
+      });
+      setIsStaffCheckInModalOpen(true);
+  };
+
   const handleStaffBulkAction = async (actionType) => {
       if (selectedStaffRooms.length === 0) return;
 
       if (actionType === 'checkin') {
-          let total = 0;
-          selectedStaffRooms.forEach(rId => {
-              const room = rooms.find(r => r.id === rId);
-              const { status } = checkRoomStatus(rId, selectedDate, true);
-              if (status !== 'occupied' && status !== 'booked') {
-                  total += room.price;
-              }
-          });
-          setStaffCheckInForm({
-              guestName: '',
-              phone: '',
-              totalPrice: total,
-              nights: 1,
-              paymentMethod: 'เงินสด',
-              isReceiptNeeded: false,
-              keyDepositCollected: false,
-              billPhoto: null
-          });
-          setIsStaffCheckInModalOpen(true);
+          startStaffCheckIn(selectedStaffRooms);
       } else if (actionType === 'checkout') {
           showConfirm({
               title: 'ยืนยันคืนห้อง',
@@ -639,17 +694,15 @@ export default function App() {
                       if (useMockData) { showNotification('โหมดตัวอย่าง: คืนห้องสำเร็จ'); setSelectedStaffRooms([]); return; }
                       const checkoutRooms = selectedStaffRooms.map(rId => {
                           const { status, booking } = checkRoomStatus(rId, selectedDate, false);
-                          if (status !== 'occupied') return null;
+                          if (status !== 'occupied' && status !== 'temporary') return null;
                           return { rId, booking };
                       }).filter(Boolean);
-                      const batchPromises = checkoutRooms.flatMap(({ rId, booking }) => [
-                          updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', booking.id), {
-                              status: 'checked-out', checkOutDate: selectedDate,
-                              checkOutTime: Timestamp.now(), keyDepositReturned: true
-                          }),
-                          updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'rooms', rId), { cleaningStatus: 'dirty' })
-                      ]);
-                      if(batchPromises.length > 0) await Promise.all(batchPromises);
+                      const changes = checkoutRooms.map(({ booking }) => bookingUpdate(booking.id, {
+                              status: 'checked-out', keyDepositReturned: true
+                      }));
+                      await commitBookingMutations(db, appId, changes);
+                      await Promise.all(checkoutRooms.map(({ rId }) =>
+                          updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'rooms', rId), { cleaningStatus: 'dirty' })));
                       showNotification(`คืนห้อง ${checkoutRooms.length} ห้อง เรียบร้อยแล้ว`);
                       setSelectedStaffRooms([]);
                   } catch (e) {
@@ -676,6 +729,15 @@ export default function App() {
 
       const checkInNights = staffCheckInForm.nights || 1;
       const checkoutDate = addDays(selectedDate, checkInNights); 
+      if (!isBookedRoom && !bookingsReady) {
+          showNotification('กำลังโหลดรายการจอง กรุณาลองอีกครั้ง', 'error');
+          return;
+      }
+      if (!isBookedRoom && (selectedStaffRooms.length === 0 || selectedStaffRooms.some(rId =>
+          !rooms.some(room => room.id === rId) || !isRoomAvailable(rId, selectedDate, checkoutDate)))) {
+          showNotification('มีห้องไม่ว่างในช่วงวันที่เข้าพัก กรุณาเลือกห้องหรือจำนวนคืนใหม่', 'error');
+          return;
+      }
       const checkInDocNo = generateSequentialDocNo('RC', selectedDate, bookings);
 
       // Upload bill photo to Firebase Storage (not Firestore) — avoids 1MB doc limit
@@ -684,48 +746,34 @@ export default function App() {
       try {
           if (isBookedRoom && selectedBookedRoom) {
               const { booking } = selectedBookedRoom;
-              await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', booking.id), {
+              await commitBookingMutations(db, appId, [bookingUpdate(booking.id, {
                   status: 'occupied',
-                  checkInTime: Timestamp.now(),
-                  checkInTimeStr: getNowTimeStr(),
                   checkInDocNo: checkInDocNo,
-                  keyDeposit: staffCheckInForm.keyDepositCollected ? 100 : 0,
-                  totalPaid: (booking.totalPrice - booking.deposit) + (staffCheckInForm.keyDepositCollected ? 100 : 0),
+                  keyDepositCollected: staffCheckInForm.keyDepositCollected,
                   paymentMethod: staffCheckInForm.paymentMethod,
                   isReceiptRequested: staffCheckInForm.isReceiptNeeded,
                   billPhotoUrl: billPhotoUrl || null,
-              });
+              })]);
               setIsStaffBookingModalOpen(false);
               showNotification('เช็คอินลูกค้าจอง เรียบร้อยแล้ว');
           } else {
-              const pricePerRoom = staffCheckInForm.totalPrice / selectedStaffRooms.length;
-              const batchPromises = selectedStaffRooms.map((rId) => {
-                  const room = rooms.find(r => r.id === rId);
-                  const { status } = checkRoomStatus(rId, selectedDate, true);
-                  if (status === 'occupied' || status === 'booked') return null;
-                  return addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'bookings'), {
-                      roomId: rId, roomName: room.name, roomPrice: room.price,
+              const changes = selectedStaffRooms.map((rId) => {
+                  const ref = doc(collection(db, 'artifacts', appId, 'public', 'data', 'bookings'));
+                  return { mode: 'create', ref, data: {
+                      roomId: rId,
                       guestName: staffCheckInForm.guestName.trim(), phone: staffCheckInForm.phone.trim(),
                       checkInDate: selectedDate,
                       checkOutDate: checkoutDate,
-                      nights: checkInNights,
-                      totalPrice: pricePerRoom,
-                      totalPaid: pricePerRoom,
-                      deposit: 0,
-                      keyDeposit: staffCheckInForm.keyDepositCollected ? 100 : 0,
-                      extraBedPrice: 0,
+                      keyDepositCollected: staffCheckInForm.keyDepositCollected,
                       paymentMethod: staffCheckInForm.paymentMethod,
                       isReceiptRequested: staffCheckInForm.isReceiptNeeded,
                       billPhotoUrl: billPhotoUrl || null,
                       status: 'occupied',
                       docNo: generateSequentialDocNo('BK', selectedDate, bookings),
                       checkInDocNo: checkInDocNo,
-                      checkInTime: Timestamp.now(),
-                      checkInTimeStr: getNowTimeStr(),
-                      updatedAt: Timestamp.now(), updatedBy: 'staff-mode'
-                  });
-              }).filter(Boolean);
-              if(batchPromises.length > 0) await Promise.all(batchPromises);
+                  } };
+              });
+              await commitBookingMutations(db, appId, changes);
               showNotification(`เช็คอินเรียบร้อย (${checkInNights} คืน)`);
               setIsStaffCheckInModalOpen(false);
               setStaffCheckInForm(prev => ({...prev, guestName: '', phone: '', checkInTimeStr: getNowTimeStr(), billPhoto: null}));
@@ -733,7 +781,11 @@ export default function App() {
           }
       } catch (e) {
           console.error(e);
-          showNotification('เกิดข้อผิดพลาด', 'error');
+          if (billPhotoUrl) {
+              try { await deleteObject(storageRef(storage, billPhotoUrl)); }
+              catch (cleanupError) { console.error('Bill photo cleanup failed:', cleanupError); }
+          }
+          showNotification(e instanceof BookingConflictError ? 'ห้องถูกจองไปแล้ว กรุณาเลือกห้องหรือวันใหม่' : 'เกิดข้อผิดพลาด', 'error');
       }
   };
 
@@ -769,7 +821,7 @@ export default function App() {
   };
 
   const openLineReport = () => {
-    const occupiedList = []; const bookedList = []; const availableList = [];
+    const occupiedList = []; const bookedList = []; const availableList = []; const unavailableList = [];
     rooms.forEach(r => {
         const { status, booking } = checkRoomStatus(r.id, selectedDate, false);
         if (status === 'occupied') {
@@ -783,11 +835,45 @@ export default function App() {
         else if (status === 'booked') {
             bookedList.push(`${r.name} (${booking.guestName}) - มัดจำ ${Number(booking.deposit || 0).toLocaleString()}`);
         }
-        else availableList.push(r.name);
+        else if (status === 'available' && r.cleaningStatus !== 'dirty') availableList.push(r.name);
+        else unavailableList.push(r.name);
     });
-    const message = `สรุปห้องพัก "จันผารีสอร์ท" \nวันที่: ${formatThaiDate(selectedDate, 'full')}\n--------------------\n✅ ว่าง (${availableList.length}):\n${availableList.length > 0 ? availableList.join(', ') : '-'}\n\n🏠 เข้าพัก (${occupiedList.length}):\n${occupiedList.length > 0 ? occupiedList.join('\n') : '-'}\n\n📒 จองไว้ (${bookedList.length}):\n${bookedList.length > 0 ? bookedList.join('\n') : '-'}\n--------------------`;
+    const message = `สรุปห้องพัก "จันผารีสอร์ท" \nวันที่: ${formatThaiDate(selectedDate, 'full')}\n--------------------\n✅ ว่างพร้อมรับ (${availableList.length}):\n${availableList.length > 0 ? availableList.join(', ') : '-'}\n\n🏠 เข้าพัก (${occupiedList.length}):\n${occupiedList.length > 0 ? occupiedList.join('\n') : '-'}\n\n📒 จองไว้ (${bookedList.length}):\n${bookedList.length > 0 ? bookedList.join('\n') : '-'}\n\n🧹 ยังไม่พร้อม (${unavailableList.length}):\n${unavailableList.length > 0 ? unavailableList.join(', ') : '-'}\n--------------------`;
     setLineMessage(message);
     setIsLineModalOpen(true);
+  };
+
+  const refreshLineGroup = async () => {
+    setLineGroupBusy(true);
+    try { setLineGroupStatus(await getLineGroup()); }
+    catch (error) { showNotification(error.message, 'error'); }
+    finally { setLineGroupBusy(false); }
+  };
+
+  const openLineGroup = () => {
+    setIsLineGroupModalOpen(true);
+    setLinePairCode('');
+    refreshLineGroup();
+  };
+
+  const createLinePairCode = async () => {
+    setLineGroupBusy(true);
+    try {
+      const result = await startLinePairing();
+      setLinePairCode(result.code);
+      showNotification('รหัสเชื่อมกลุ่มใช้ได้ 10 นาที');
+    } catch (error) { showNotification(error.message, 'error'); }
+    finally { setLineGroupBusy(false); }
+  };
+
+  const sendLineGroupReport = async () => {
+    setLineGroupBusy(true);
+    try {
+      await sendLineSummary();
+      showNotification('LINE รับสรุปเข้ากลุ่มแล้ว');
+      await refreshLineGroup();
+    } catch (error) { showNotification(error.message, 'error'); }
+    finally { setLineGroupBusy(false); }
   };
 
   const copyToClipboard = (text) => {
@@ -802,6 +888,12 @@ export default function App() {
         document.body.removeChild(textArea);
         if (successful) showNotification("คัดลอกแล้ว"); else showNotification("คัดลอกไม่สำเร็จ", "error");
     } catch (err) { showNotification("เกิดข้อผิดพลาด", "error"); }
+  };
+
+  const copyStaffLink = () => {
+    const url = new URL(window.location.pathname, window.location.origin);
+    url.searchParams.set('staff', '1');
+    copyToClipboard(url.toString());
   };
 
   const openMessagePreview = (text) => {
@@ -875,17 +967,18 @@ export default function App() {
         const totalDeposit = Number(formData.deposit) || 0;
         const depositPerRoom = roomsToBook.length > 0 ? Math.floor(totalDeposit / roomsToBook.length) : 0;
 
-        const batchPromises = roomsToBook.map((rId, index) => {
+        const changes = roomsToBook.map((rId) => {
             const rConfig = rooms.find(r => r.id === rId);
-            return addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'bookings'), {
+            const ref = doc(collection(db, 'artifacts', appId, 'public', 'data', 'bookings'));
+            return { mode: 'create', ref, data: {
                 ...commonData, roomId: rConfig.id, roomName: rConfig.name, roomPrice: rConfig.price,
                 totalPrice: rConfig.price * nights, 
                 deposit: depositPerRoom,
                 docNo: depositDocNo, checkInDocNo: '', status: 'booked', createdAt: Timestamp.now(),
                 keyDeposit: 0, extraBedPrice: 0, totalPaid: 0, paymentMethod: 'เงินสด'
-            });
+            } };
         });
-        await Promise.all(batchPromises);
+        await commitBookingMutations(db, appId, changes);
         const summary = generateBookingSummary(
             formData.guestName,
             roomsToBook.map(id => rooms.find(r=>r.id===id).name).join(', '),
@@ -924,13 +1017,11 @@ export default function App() {
          // Carragher review 2026-08-18, Critical 1: the add and the cancel used to be two
          // separate un-transacted Promise.all() calls, so a failure between them could leave
          // both the new room and the vacated room live with the same docNo/status, double
-         // counting the deposit. Both halves are now committed as a single atomic writeBatch:
+         // counting the deposit. Both halves are committed in one reservation transaction:
          // either both land or neither does. The new room's doc ref is minted client-side via
-         // doc(collection(...)) so it can be batch.set() instead of addDoc(); the removal is
-         // batch.update(). This covers the non-1:1 removal path too, not only the 1:1 swap --
-         // both branches below are queued onto the same `batch` and committed together.
+         // doc(collection(...)), so every booking and room-night lock shares the same commit.
+         const reservationChanges = [];
          if (roomsToAdd.length > 0 || bookingsToRemove.length > 0) {
-             const batch = writeBatch(db);
              // Only ever set when isSingleRoomSwap (exactly one new room to link a cancelled
              // record to); stays null for any other shape, where no 1:1 target exists.
              let swapTargetRoomDocId = null;
@@ -968,12 +1059,12 @@ export default function App() {
                         : 0;
                     const newRoomRef = doc(collection(db, 'artifacts', appId, 'public', 'data', 'bookings'));
                     if (isSingleRoomSwap) swapTargetRoomDocId = newRoomRef.id;
-                    batch.set(newRoomRef, {
+                    reservationChanges.push({ mode: 'create', ref: newRoomRef, data: {
                         ...commonData, roomId: rConfig.id, roomName: rConfig.name, roomPrice: rConfig.price,
                         totalPrice: rConfig.price * nights, deposit: carriedDeposit,
                         docNo: depositDocNo, checkInDocNo: '', status: 'booked', createdAt: Timestamp.now(),
                         keyDeposit: 0, extraBedPrice: 0, totalPaid: 0, paymentMethod: 'เงินสด'
-                    });
+                    } });
                  });
              }
 
@@ -1001,7 +1092,7 @@ export default function App() {
                  // existing convention throughout (no serverTimestamp() import exists in this
                  // codebase).
                  bookingsToRemove.forEach(b => {
-                     batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', b.id), {
+                     reservationChanges.push(bookingUpdate(b.id, {
                          status: 'cancelled',
                          originalDeposit: Number(b.deposit) || 0,
                          originalDocNo: b.docNo || '',
@@ -1011,26 +1102,25 @@ export default function App() {
                          movedToRoomId: isSingleRoomSwap ? swapTargetRoomDocId : null,
                          updatedAt: Timestamp.now(),
                          updatedBy: user.uid
-                     });
+                     }));
                  });
              }
 
-             await batch.commit();
          }
 
          // อัปเดตห้องหลัก (เฉพาะกรณีที่ห้องเดิมยังอยู่ในรายการที่เลือก ไม่ได้ถูกสลับออกไป)
          const primaryStillSelected = bookingsToKeep.some(b => b.id === formData.id);
          if (primaryStillSelected) {
-             await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', formData.id), {
+             reservationChanges.push(bookingUpdate(formData.id, {
                  ...commonData, roomPrice: Number(formData.roomPrice), totalPrice: Number(formData.roomPrice) * nights, deposit: Number(formData.deposit)
-             });
+             }));
          }
 
          // ซิงค์ข้อมูลลูกค้า/วันที่ ไปยังห้องอื่นๆ ที่ยังอยู่ในกลุ่ม (ไม่รวมห้องหลักที่เพิ่งอัปเดตไปแล้ว)
          const siblingsToSync = bookingsToKeep.filter(b => b.id !== formData.id);
          if (siblingsToSync.length > 0) {
-             const siblingUpdates = siblingsToSync.map(b =>
-                 updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', b.id), {
+             siblingsToSync.forEach(b =>
+                 reservationChanges.push(bookingUpdate(b.id, {
                      guestName: formData.guestName,
                      phone: formData.phone,
                      checkInDate: formData.checkInDate,
@@ -1042,10 +1132,10 @@ export default function App() {
                      lineId: formData.lineId || '',
                      dob: formData.dob || '',
                      updatedAt: Timestamp.now()
-                 })
+                 }))
              );
-             await Promise.all(siblingUpdates);
          }
+         await commitBookingMutations(db, appId, reservationChanges);
 
          const summary = generateBookingSummary(
             formData.guestName,
@@ -1097,14 +1187,14 @@ export default function App() {
                  const batch = updates.map(u => {
                      const targetBStatus = u.bStatus === 'checked-out' ? 'checked-out' : 'occupied';
                      const bTimeUpdate = u.bStatus === 'booked' ? { checkInTime: Timestamp.now(), checkInTimeStr: formData.checkInTimeStr || getNowTimeStr() } : {};
-                     return updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', u.id), {
+                     return bookingUpdate(u.id, {
                          ...commonUpdate, ...bTimeUpdate, status: targetBStatus, checkInDocNo: newRcDocNo,
                          totalPaid: u.allocated, keyDeposit: u.isPrimary ? Number(formData.keyDeposit) : 0,
                          extraBedPrice: u.isPrimary ? Number(formData.extraBedPrice) : 0,
                          paymentMethod: formData.paymentMethod
                      });
                  });
-                 await Promise.all(batch);
+                 await commitBookingMutations(db, appId, batch);
                  showNotification('บันทึกรายการเรียบร้อย');
                  setIsCheckInModalOpen(false);
              } catch(err) { console.error(err); showNotification('เกิดข้อผิดพลาด', 'error'); }
@@ -1134,12 +1224,12 @@ export default function App() {
              const newTotalPaid = Number(formData.totalPaid) + paymentInHand;
              const targetStatus = isAlreadyCheckedOut ? 'checked-out' : 'occupied';
              const timeUpdate = (!isAlreadyCheckedOut && !isAlreadyOccupied) ? { checkInTime: Timestamp.now(), checkInTimeStr: formData.checkInTimeStr || getNowTimeStr() } : {};
-             await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', formData.id), {
+             await commitBookingMutations(db, appId, [bookingUpdate(formData.id, {
                  ...commonUpdate, ...timeUpdate, status: targetStatus, checkInDocNo: newRcDocNo,
                  keyDeposit: Number(formData.keyDeposit), extraBedPrice: Number(formData.extraBedPrice),
                  totalPaid: newTotalPaid, paymentMethod: formData.paymentMethod,
                  ...(formData.checkOutTimeStr ? { checkOutTimeStr: formData.checkOutTimeStr } : {})
-             });
+             })]);
              showNotification('บันทึกรายการเรียบร้อย');
              setIsCheckInModalOpen(false);
          } catch(err) { console.error(err); showNotification('เกิดข้อผิดพลาด', 'error'); }
@@ -1160,7 +1250,7 @@ export default function App() {
              // Update all rooms in the group to needs-cleaning
              const groupBids = formData.groupCheckInRooms?.length > 0 ? formData.groupCheckInRooms : [formData.id];
              const groupBookingDocs = bookings.filter(b => groupBids.includes(b.id));
-             await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', formData.id), payload);
+             await commitBookingMutations(db, appId, [bookingUpdate(formData.id, payload)]);
              await Promise.all(groupBookingDocs.map(b =>
                b.roomId ? updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'rooms', b.roomId), { cleaningStatus: 'dirty' }) : null
              ).filter(Boolean));
@@ -1203,7 +1293,9 @@ export default function App() {
          onConfirm: async () => {
              if (useMockData) { showNotification('โหมดตัวอย่าง: เช็คเอาท์สำเร็จ'); return; }
              try {
-                 await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', bid), { status: 'checked-out', checkOutTime: Timestamp.now(), checkOutTimeStr: getNowTimeStr(), keyDepositReturned: true });
+                 await commitBookingMutations(db, appId, [bookingUpdate(bid, {
+                   status: 'checked-out', checkOutTime: Timestamp.now(), checkOutTimeStr: getNowTimeStr(), keyDepositReturned: true,
+                 })]);
                  const bkDoc = bookings.find(b => b.id === bid);
                  if (bkDoc?.roomId) await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'rooms', bkDoc.roomId), { cleaningStatus: 'dirty' });
                  showNotification("เช็คเอาท์เรียบร้อย ✅");
@@ -1221,11 +1313,11 @@ export default function App() {
          onConfirm: async () => {
              if (useMockData) { showNotification('โหมดตัวอย่าง: เช็คอินสำเร็จ'); return; }
              try {
-                 await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', bid), {
+                 await commitBookingMutations(db, appId, [bookingUpdate(bid, {
                      status: 'occupied',
                      checkInTime: Timestamp.now(),
                      checkInTimeStr: getNowTimeStr(),
-                 });
+                 })]);
                  showNotification(`เช็คอิน ${roomName} เรียบร้อยแล้ว ✅`);
              } catch (error) { showNotification("เกิดข้อผิดพลาด", "error"); }
          }
@@ -1248,12 +1340,12 @@ export default function App() {
           onConfirm: async () => {
               if (useMockData) { showNotification('โหมดตัวอย่าง: ยกเลิกสำเร็จ'); setIsBookingModalOpen(false); return; }
               try {
-                  await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', formData.id), {
+                  await commitBookingMutations(db, appId, [bookingUpdate(formData.id, {
                       status: 'cancelled',
                       cancelledReason: 'manual-cancel',
                       updatedAt: Timestamp.now(),
                       updatedBy: user.uid
-                  });
+                  })]);
                   setIsBookingModalOpen(false); showNotification("ยกเลิกการจองสำเร็จ");
               } catch (error) { showNotification("เกิดข้อผิดพลาด", "error"); }
           }
@@ -1283,22 +1375,29 @@ export default function App() {
       const checkInTimeStr = now.toTimeString().slice(0,5);
       const checkOutDT = new Date(now.getTime() + tempForm.durationHours * 3600000);
       const scheduledCheckOutTimeStr = checkOutDT.toTimeString().slice(0,5);
-      const checkInDate = formatDate(now);
-      const checkOutDate = formatDate(checkOutDT);
+      const checkInDate = todayInThailand(now);
+      const checkOutDate = todayInThailand(checkOutDT);
       try {
-          await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'bookings'), {
-              roomId: tempRoom.id, roomName: tempRoom.name,
+          const ref = doc(collection(db, 'artifacts', appId, 'public', 'data', 'bookings'));
+          const tempData = {
+              roomId: tempRoom.id,
               guestName: tempForm.guestName || 'ลูกค้าชั่วคราว',
               checkInDate, checkOutDate,
-              checkInTimeStr, scheduledCheckOutTimeStr,
               durationHours: tempForm.durationHours,
+              keyDepositCollected: tempForm.keyDepositCollected,
+              paymentMethod: tempForm.paymentMethod,
+              status: 'temporary',
+              docNo: generateSequentialDocNo('TM', checkInDate, bookings),
+          };
+          const data = user?.uid === ownerUid ? {
+              ...tempData, roomName: tempRoom.name, checkInTimeStr, scheduledCheckOutTimeStr,
               totalPrice: tempForm.price, totalPaid: tempForm.price,
               deposit: 0, keyDeposit: tempForm.keyDepositCollected ? 100 : 0,
-              extraBedPrice: 0, paymentMethod: tempForm.paymentMethod,
-              status: 'temporary', nights: 0, roomPrice: tempRoom.price,
-              docNo: generateSequentialDocNo('TM', checkInDate, bookings),
+              extraBedPrice: 0, nights: 0, roomPrice: tempRoom.price,
               checkInTime: Timestamp.now(), createdAt: Timestamp.now(), updatedAt: Timestamp.now(),
-          });
+          } : tempData;
+          if (user?.uid === ownerUid) delete data.keyDepositCollected;
+          await commitBookingMutations(db, appId, [{ mode: 'create', ref, data }]);
           showNotification(`เช็คอินชั่วคราว — ออก ${scheduledCheckOutTimeStr} น.`);
           setIsTempModalOpen(false); setTempRoom(null);
       } catch(e) { console.error(e); showNotification('เกิดข้อผิดพลาด', 'error'); }
@@ -1903,13 +2002,15 @@ export default function App() {
   const dashboardStats = useMemo(() => {
       let occupied = 0;
       let booked = 0;
+      const readyRooms = [];
       rooms.forEach(r => {
         const { status } = checkRoomStatus(r.id, selectedDate, false);
         if (status === 'occupied') occupied++;
         else if (status === 'booked') booked++;
+        else if (status === 'available' && r.cleaningStatus !== 'dirty') readyRooms.push(r);
       });
       const total = rooms.length;
-      return { total, occupied, booked, available: total - occupied - booked };
+      return { total, occupied, booked, available: readyRooms.length, readyRooms };
   }, [bookings, rooms, selectedDate]);
 
   const occupancyData = useMemo(() => {
@@ -2092,7 +2193,34 @@ export default function App() {
       <div className="container mx-auto p-3 md:p-6">
         {currentView === 'dashboard' && (
           <div className="space-y-6 animate-fade-in relative">
-             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 md:gap-6">
+              {role === 'owner' && (
+                <div className="bg-white rounded-2xl border border-emerald-200 p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                  <div>
+                    <p className="font-bold text-slate-800">กลุ่ม LINE พนักงาน</p>
+                    <p className="text-xs text-slate-500">เชื่อม OA เพื่อกดส่งสรุปห้องพร้อมรับเข้ากลุ่ม</p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button type="button" onClick={copyStaffLink} className="rounded-xl border border-emerald-200 px-4 py-2.5 text-sm font-bold text-emerald-700 hover:bg-emerald-50">คัดลอกลิงก์พนักงาน</button>
+                    <button type="button" onClick={openLineGroup} className="rounded-xl bg-[#06C755] px-4 py-2.5 text-sm font-bold text-white hover:bg-[#05b54d]">เชื่อมกลุ่ม / ส่งสรุป</button>
+                  </div>
+                </div>
+              )}
+              {role === 'staff' && (
+                <section className="bg-white rounded-2xl border border-emerald-200 p-4 md:p-5 shadow-sm" aria-label="ห้องพร้อมรับลูกค้า">
+                  <p className="text-sm font-bold text-slate-600">ห้องพร้อมรับลูกค้า · {formatThaiDate(selectedDate, 'full')}</p>
+                  <p className="text-3xl font-black text-emerald-700 mt-1">{dashboardStats.available} ห้อง</p>
+                  <div className="flex flex-wrap gap-2 mt-3">
+                    {dashboardStats.readyRooms.map(room => (
+                      <button key={room.id} type="button" onClick={() => startStaffCheckIn([room.id])} className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-bold text-emerald-800 hover:bg-emerald-100">
+                        {room.name} · รับ walk-in
+                      </button>
+                    ))}
+                    {dashboardStats.available === 0 && <span className="text-sm text-slate-500">ไม่มีห้องพร้อมรับลูกค้าในวันที่เลือก</span>}
+                  </div>
+                  <p className="text-xs text-slate-500 mt-3">กดชื่อห้องเพื่อกรอกข้อมูลและยืนยันเช็กอิน</p>
+                </section>
+              )}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 md:gap-6">
                 <div className="bg-white p-5 md:p-6 rounded-3xl shadow-sm border border-slate-200 flex flex-col items-center justify-center relative overflow-hidden group hover:shadow-md transition-shadow">
                     <p className="text-slate-400 text-xs font-bold uppercase tracking-widest mb-1 z-10">ห้องทั้งหมด</p>
                     <p className="text-3xl md:text-4xl font-black text-slate-800 z-10">{dashboardStats.total}</p>
@@ -2120,7 +2248,7 @@ export default function App() {
                   </div>
                   <span className="text-xs font-bold text-emerald-600">{formatThaiDate(selectedDate, 'full')}</span>
                </div>
-               {role === 'owner' && <button onClick={openLineReport} className="bg-[#06C755] text-white px-4 py-2.5 rounded-xl shadow-lg shadow-green-100 text-sm font-bold flex items-center justify-center gap-1 hover:bg-[#05b54d] transition-transform transform active:scale-95"><MessageSquare size={18}/><span className="hidden md:inline"> สรุป LINE</span></button>}
+               {role === 'owner' && <button onClick={openLineReport} className="bg-[#06C755] text-white px-4 py-2.5 rounded-xl shadow-lg shadow-green-100 text-sm font-bold flex items-center justify-center gap-1 hover:bg-[#05b54d] transition-transform transform active:scale-95"><MessageSquare size={18}/><span className="hidden md:inline"> สรุปคัดลอก</span></button>}
             </div>
 
             <div className={`grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 md:gap-6 ${role === 'staff' ? (selectedStaffRooms.length > 0 ? 'pb-32 md:pb-10' : 'pb-10') : ''}`}>
@@ -2436,7 +2564,7 @@ export default function App() {
             )}
         </Modal>
 
-        {currentView === 'expenses' && (
+        {role === 'owner' && currentView === 'expenses' && (
            <div className="space-y-6 animate-fade-in">
              <div className="flex justify-between items-center">
                  <h2 className="text-2xl font-black text-slate-800 flex items-center gap-3"><Wallet className="text-emerald-500"/> รายจ่าย</h2>
@@ -3156,7 +3284,7 @@ export default function App() {
 
               <div>
                   <label className="block text-sm font-bold text-slate-600 mb-2">ราคา (บาท)</label>
-                  <input type="number" className="w-full p-3 bg-slate-50 border-0 rounded-xl text-2xl font-black text-center text-amber-700 focus:ring-2 focus:ring-amber-400 outline-none" value={tempForm.price} onChange={e => setTempForm({...tempForm, price: Number(e.target.value)})}/>
+                  <input type="number" className="w-full p-3 bg-slate-50 border-0 rounded-xl text-2xl font-black text-center text-amber-700 focus:ring-2 focus:ring-amber-400 outline-none" value={tempForm.price} readOnly={user?.uid !== ownerUid} onChange={e => setTempForm({...tempForm, price: Number(e.target.value)})}/>
               </div>
 
               <div>
@@ -3292,7 +3420,7 @@ export default function App() {
                   </div>
                   <div className="text-center">
                       <p className="text-slate-500 text-sm font-medium mb-1">ยอดชำระรวม ({selectedStaffRooms.length} ห้อง x {staffCheckInForm.nights} คืน)</p>
-                      <input type="number" className="text-4xl font-black text-emerald-600 bg-transparent text-center w-full outline-none focus:ring-0" value={staffCheckInForm.totalPrice} onChange={(e) => setStaffCheckInForm({...staffCheckInForm, totalPrice: Number(e.target.value)})}/>
+                      <input type="number" className="text-4xl font-black text-emerald-600 bg-transparent text-center w-full outline-none focus:ring-0" value={selectedStaffRooms.reduce((sum, id) => sum + Number(rooms.find(room => room.id === id)?.price || 0), 0) * staffCheckInForm.nights} readOnly/>
                       <p className="text-slate-400 text-xs">บาท</p>
                   </div>
               </div>
@@ -3348,6 +3476,26 @@ export default function App() {
             <div className="bg-slate-100 p-4 rounded-xl text-sm whitespace-pre-wrap font-mono text-slate-700">{lineMessage}</div>
             <button onClick={() => copyToClipboard(lineMessage)} className="w-full py-3 bg-[#06C755] text-white rounded-xl font-bold hover:bg-[#05b54d] flex justify-center items-center gap-2 shadow-lg shadow-green-100"><Copy size={18}/> คัดลอกข้อความ</button>
          </div>
+      </Modal>
+
+      <Modal isOpen={isLineGroupModalOpen} onClose={() => setIsLineGroupModalOpen(false)} title="เชื่อมกลุ่ม LINE และส่งสรุป">
+        <div className="space-y-4 text-sm">
+          <p className="text-slate-600">สรุปที่ส่งเข้ากลุ่มมีเฉพาะห้องพร้อมรับและลิงก์พนักงาน ไม่มีชื่อลูกค้า เบอร์โทร หรือยอดเงิน</p>
+          <div className="rounded-xl bg-slate-50 p-3">
+            <p className="font-bold">สถานะ: {lineGroupStatus?.linked ? `เชื่อมกลุ่มแล้ว (…${lineGroupStatus.groupSuffix})` : 'ยังไม่เชื่อมกลุ่ม'}</p>
+            <p className="mt-1 text-slate-500">Webhook: {window.location.origin}/api/line-webhook</p>
+            <p className="mt-1 text-slate-500">เปิด Allow bot to join group chats และ Use webhook ใน LINE Developers ก่อน</p>
+          </div>
+          {!lineGroupStatus?.pairingReady && <p className="rounded-xl bg-amber-50 p-3 text-amber-800">เซิร์ฟเวอร์ยังไม่ได้ตั้งค่า LINE Channel Secret</p>}
+          <div className="flex flex-wrap gap-2">
+            <button type="button" disabled={lineGroupBusy || !lineGroupStatus?.pairingReady} onClick={createLinePairCode} className="rounded-xl bg-slate-800 px-4 py-2.5 font-bold text-white disabled:opacity-50">สร้างรหัสเชื่อมกลุ่ม</button>
+            <button type="button" disabled={lineGroupBusy} onClick={refreshLineGroup} className="rounded-xl border border-slate-200 px-4 py-2.5 font-bold disabled:opacity-50">ตรวจสถานะอีกครั้ง</button>
+          </div>
+          {linePairCode && <p className="rounded-xl bg-amber-50 p-3 text-amber-900">เชิญ OA เข้ากลุ่ม แล้วส่งข้อความ <strong>/เชื่อม {linePairCode}</strong> ในกลุ่มภายใน 10 นาที จากนั้นกดตรวจสถานะอีกครั้ง</p>}
+          {lineGroupStatus?.preview && <div className="whitespace-pre-wrap rounded-xl bg-emerald-50 p-4 text-emerald-900">{lineGroupStatus.preview}</div>}
+          {lineGroupStatus?.linked && !lineGroupStatus?.sendingReady && <p className="rounded-xl bg-amber-50 p-3 text-amber-800">ต้องตั้งค่า LINE Channel Access Token และลิงก์ HTTPS ของหน้า Staff ก่อนส่งจริง</p>}
+          <button type="button" disabled={lineGroupBusy || !lineGroupStatus?.sendingReady} onClick={sendLineGroupReport} className="w-full rounded-xl bg-[#06C755] px-4 py-3 font-bold text-white disabled:opacity-50">{lineGroupBusy ? 'กำลังทำงาน…' : 'ส่งสรุปเข้ากลุ่ม LINE'}</button>
+        </div>
       </Modal>
 
       <Modal isOpen={isMessagePreviewOpen} onClose={() => setIsMessagePreviewOpen(false)} title="ตัวอย่างข้อความ (แก้ไขได้)">
@@ -4333,7 +4481,7 @@ export default function App() {
         })()}
       </Modal>
 
-      <Modal isOpen={isExpenseModalOpen} onClose={() => setIsExpenseModalOpen(false)} title={expenseModalMode === 'create' ? `บันทึกรายจ่าย` : `แก้ไขรายจ่าย`}>
+      <Modal isOpen={role === 'owner' && isExpenseModalOpen} onClose={() => setIsExpenseModalOpen(false)} title={expenseModalMode === 'create' ? `บันทึกรายจ่าย` : `แก้ไขรายจ่าย`}>
          <form onSubmit={handleExpenseSubmit} className="space-y-4 text-sm font-sans">
             <div><label className="block text-slate-500 font-bold mb-1.5 text-xs">วันที่จ่าย</label><input type="date" required className="w-full p-2.5 bg-slate-50 border-0 rounded-xl" value={expenseForm.date} onChange={e => setExpenseForm({...expenseForm, date: e.target.value})} /></div>
             <div><label className="block text-slate-500 font-bold mb-1.5 text-xs">รายการ</label><input type="text" required placeholder="เช่น จ่ายค่าเน็ต 3BB" className="w-full p-2.5 bg-slate-50 border-0 rounded-xl" value={expenseForm.title} onChange={e => setExpenseForm({...expenseForm, title: e.target.value})} /></div>
