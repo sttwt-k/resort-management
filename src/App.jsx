@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { auth, db, storage, appId, ownerUid, ownerEmail } from './lib/firebase';
 import { signInAnonymously, signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
 import {
@@ -106,7 +106,12 @@ const todayInThailand = (date = new Date()) => {
 
 export default function App() {
   const [user, setUser] = useState(null);
-  const [role, setRole] = useState(() => new URLSearchParams(window.location.search).get('staff') === '1' ? 'staff' : null);
+  const [role, setRole] = useState('staff');
+  const [isAdminLoginOpen, setIsAdminLoginOpen] = useState(false);
+  const initialAuthChecked = useRef(false);
+  const bookingSaveInFlight = useRef(false);
+  const [isBookingSaving, setIsBookingSaving] = useState(false);
+  const [bookingSaveError, setBookingSaveError] = useState('');
   const [useMockData, setUseMockData] = useState(false);
 
   const [rooms, setRooms] = useState([]);
@@ -304,7 +309,9 @@ export default function App() {
     const unsubscribe = onAuthStateChanged(auth, async (u) => {
       if (!isMounted) return;
       if (u) {
-        if (u.uid === ownerUid && new URLSearchParams(window.location.search).get('staff') === '1') {
+        const isInitialAuth = !initialAuthChecked.current;
+        initialAuthChecked.current = true;
+        if (u.uid === ownerUid && isInitialAuth) {
           await signOut(auth);
           return;
         }
@@ -312,7 +319,7 @@ export default function App() {
         setUseMockData(false);
         setLoading(false);
         if (u.uid !== ownerUid) {
-          setRole(currentRole => currentRole === 'owner' ? null : currentRole);
+          setRole(currentRole => currentRole === 'owner' ? 'staff' : currentRole);
           setCurrentView('dashboard');
           setIsExpenseModalOpen(false);
           setExpenseForm(initialExpenseForm);
@@ -320,7 +327,7 @@ export default function App() {
         return;
       }
       setUser(null);
-      setRole(currentRole => currentRole === 'owner' ? null : currentRole);
+      setRole(currentRole => currentRole === 'owner' ? 'staff' : currentRole);
       setCurrentView('dashboard');
       setIsExpenseModalOpen(false);
       setExpenseForm(initialExpenseForm);
@@ -356,6 +363,7 @@ export default function App() {
         return false;
       }
       setRole('owner');
+      setIsAdminLoginOpen(false);
       return true;
     } catch (error) {
       console.error('Owner sign-in failed:', error.code);
@@ -364,7 +372,8 @@ export default function App() {
   };
 
   const handleLogout = async () => {
-    setRole(null);
+    setRole('staff');
+    setIsMobileMenuOpen(false);
     setCurrentView('dashboard');
     setExpenses([]);
     setPayeeHistory([]);
@@ -612,6 +621,7 @@ export default function App() {
             ...initialBookingForm, checkInDate: selectedDate, checkOutDate: formatDate(nextDay), nights: 1,
             roomPrice: room.price, deposit: 0, docNo: '', checkInDocNo: '', selectedAdditionalRooms: [], groupCheckInRooms: []
           });
+          setBookingSaveError('');
           setIsBookingModalOpen(true);
       } else {
           const groupBookings = bookings.filter(b => b.docNo === booking.docNo && b.status === booking.status && b.id !== booking.id);
@@ -633,7 +643,8 @@ export default function App() {
           });
           
           if (status === 'booked') {
-              setIsBookingModalOpen(true);
+              setBookingSaveError('');
+          setIsBookingModalOpen(true);
           } else {
               setIsCheckInModalOpen(true);
           }
@@ -807,17 +818,15 @@ export default function App() {
   };
 
   const handleDateChange = (field, value) => {
-      if (field === 'checkInDate') {
-          const newCheckout = addDays(value, formData.nights);
-          setFormData(prev => ({ ...prev, checkInDate: value, checkOutDate: newCheckout }));
-      } else if (field === 'nights') {
-          const n = parseInt(value) || 1;
-          const newCheckout = addDays(formData.checkInDate, n);
-          setFormData(prev => ({ ...prev, nights: n, checkOutDate: newCheckout }));
-      } else if (field === 'checkOutDate') {
-          const n = calculateNights(formData.checkInDate, value);
-          setFormData(prev => ({ ...prev, checkOutDate: value, nights: n > 0 ? n : 1 }));
-      }
+      setFormData(prev => {
+          const next = { ...prev, [field]: value };
+          if (field === 'checkInDate' && value && (!next.checkOutDate || next.checkOutDate <= value)) {
+              next.checkOutDate = addDays(value, 1);
+          }
+          next.nights = next.checkInDate && next.checkOutDate > next.checkInDate
+              ? Math.max(0, calculateNights(next.checkInDate, next.checkOutDate)) : 0;
+          return next;
+      });
   };
 
   const openLineReport = () => {
@@ -930,8 +939,13 @@ export default function App() {
 
   const handleBookingSave = async (e) => {
     e.preventDefault();
-    if (!user) return;
-    if(!formData.guestName || !formData.phone) return alert('กรุณากรอกชื่อและเบอร์โทรศัพท์');
+    if (bookingSaveInFlight.current) return;
+    setBookingSaveError('');
+    if (!user || !bookingsReady) { setBookingSaveError('กำลังโหลดข้อมูล กรุณารอสักครู่'); return; }
+    if (!formData.checkInDate || !formData.checkOutDate || formData.checkOutDate <= formData.checkInDate) {
+      setBookingSaveError('กรุณาเลือกวันเช็คเอาต์หลังวันเช็คอินอย่างน้อย 1 วัน'); return;
+    }
+    if(!formData.guestName.trim() || !formData.phone.trim()) return alert('กรุณากรอกชื่อและเบอร์โทรศัพท์');
 
     if (!formData.id) {
         if (!isRoomAvailable(selectedRoom.id, formData.checkInDate, formData.checkOutDate)) return alert(`ห้อง ${selectedRoom.name} ไม่ว่างในช่วงเวลานี้`);
@@ -953,6 +967,8 @@ export default function App() {
         return; 
     }
 
+    bookingSaveInFlight.current = true;
+    setIsBookingSaving(true);
     const nights = calculateNights(formData.checkInDate, formData.checkOutDate);
     const commonData = {
       guestName: formData.guestName, phone: formData.phone, checkInDate: formData.checkInDate, checkOutDate: formData.checkOutDate,
@@ -1150,7 +1166,15 @@ export default function App() {
         showNotification('อัปเดตข้อมูลการจองสำเร็จ');
         setIsBookingModalOpen(false);
       }
-    } catch (error) { console.error(error); showNotification('เกิดข้อผิดพลาด', 'error'); }
+    } catch (error) {
+      console.error(error);
+      setBookingSaveError(error instanceof BookingConflictError
+        ? 'ห้องพักหรือข้อมูลการจองมีการเปลี่ยนแปลง กรุณาตรวจสอบห้องว่างอีกครั้ง'
+        : 'บันทึกไม่สำเร็จ กรุณาตรวจสอบการเชื่อมต่อแล้วลองอีกครั้ง');
+    } finally {
+      bookingSaveInFlight.current = false;
+      setIsBookingSaving(false);
+    }
   };
 
   const handleCheckInSave = async () => {
@@ -2057,7 +2081,7 @@ export default function App() {
   }, [consumableLogs, reportMonth]);
 
   if (loading) return <div className="h-screen flex items-center justify-center text-emerald-600 font-bold bg-slate-100 animate-pulse">กำลังโหลดข้อมูล...</div>;
-  if (!role) return <LoginScreen onLogin={handleLogin} />;
+
 
   // rooms already part of the booking being edited (including the clicked/primary room) should always
   // be shown as selectable, since their own existing reservation would otherwise make isRoomAvailable
@@ -2083,6 +2107,7 @@ export default function App() {
     <div className="min-h-screen w-full overflow-x-hidden bg-slate-100 text-slate-800 pb-28 md:pb-20 font-sans">
       <OfflineBanner useMockData={useMockData} />
       {notification && <div className={`fixed top-6 right-6 px-6 py-4 rounded-2xl shadow-xl z-[70] text-white font-medium flex items-center gap-2 animate-fade-in ${notification.type === 'error' ? 'bg-red-500' : 'bg-emerald-600'}`}>{notification.type === 'error' ? <AlertCircle size={20}/> : <CheckCircle size={20}/>} {notification.message}</div>}
+      {isAdminLoginOpen && <LoginScreen onLogin={handleLogin} onClose={() => setIsAdminLoginOpen(false)} />}
       <ConfirmModal dialog={confirmDialog} onClose={() => setConfirmDialog(null)} />
 
       <header className="bg-white/95 backdrop-blur-md text-emerald-900 shadow-sm sticky top-0 z-40 border-b border-white">
@@ -2092,12 +2117,13 @@ export default function App() {
               <div className="min-w-0">
                   <h1 className="text-base md:text-xl font-extrabold tracking-tight leading-tight">Chanpha Resort</h1>
                   <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider flex items-center gap-1">
-                      {role === 'owner' ? 'Owner Mode' : 'Staff Mode'}
+                      {role === 'owner' ? 'Admin Mode' : 'Staff Mode'}
                       {useMockData && <span className="bg-red-100 text-red-600 px-1.5 py-0.5 rounded ml-1 animate-pulse">DEMO</span>}
                   </span>
               </div>
           </div>
           
+          {role === 'staff' && <button onClick={() => setIsAdminLoginOpen(true)} className="order-last ml-auto flex shrink-0 items-center gap-2 rounded-xl bg-slate-800 px-3 py-2 text-sm font-bold text-white"><Lock size={16}/> Admin</button>}
           <div className="hidden md:flex items-center gap-3">
               {role === 'owner' && (
                   <div className="flex bg-slate-100/80 p-1 rounded-2xl gap-1">
@@ -3580,18 +3606,18 @@ export default function App() {
          </div>
       </Modal>
 
-      <Modal isOpen={isBookingModalOpen} onClose={() => setIsBookingModalOpen(false)} title={formData.id ? `แก้ไขข้อมูล (${formData.docNo})` : `จองห้องพักใหม่`}>
-        <div className="space-y-6 font-sans">
+      <Modal isOpen={isBookingModalOpen} maxWidth="max-w-4xl" onClose={() => { if (!bookingSaveInFlight.current) { setIsBookingModalOpen(false); setBookingSaveError(''); } }} title={formData.id ? `แก้ไขข้อมูล (${formData.docNo})` : `จองห้องพักใหม่`}>
+        <fieldset disabled={isBookingSaving} aria-busy={isBookingSaving} className="booking-form min-w-0 space-y-6 font-sans">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="space-y-4">
                     <div className="bg-slate-50 p-5 rounded-2xl border border-slate-100">
                         <h3 className="text-sm font-bold text-slate-600 mb-4 flex items-center gap-2 uppercase tracking-wide"><Calendar size={16} className="text-emerald-500"/> ข้อมูลการเข้าพัก</h3>
                         <div className="space-y-4">
-                            <div className="grid grid-cols-2 gap-4">
-                                <div><label className="block text-xs font-bold text-slate-400 mb-1.5">วันที่เข้าพัก</label><input type="date" className="w-full p-2.5 bg-white border-0 rounded-xl text-sm font-bold shadow-sm focus:ring-2 focus:ring-emerald-400" value={formData.checkInDate} onChange={e => handleDateChange('checkInDate', e.target.value)} /></div>
-                                <div><label className="block text-xs font-bold text-slate-400 mb-1.5">จำนวนคืน</label><input type="number" min="1" className="w-full p-2.5 bg-white border-0 rounded-xl text-sm font-bold shadow-sm text-center focus:ring-2 focus:ring-emerald-400" value={formData.nights} onChange={e => handleDateChange('nights', e.target.value)} /></div>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                <div><label className="block text-xs font-bold text-slate-400 mb-1.5">วันเช็คอิน</label><input type="date" className="w-full p-2.5 bg-white border-0 rounded-xl text-sm font-bold shadow-sm focus:ring-2 focus:ring-emerald-400" value={formData.checkInDate} onChange={e => handleDateChange('checkInDate', e.target.value)} /></div>
+                                <div><label className="block text-xs font-bold text-slate-400 mb-1.5">วันเช็คเอาต์</label><input type="date" min={formData.checkInDate ? addDays(formData.checkInDate, 1) : undefined} className="w-full p-2.5 bg-white border-0 rounded-xl text-sm font-bold shadow-sm focus:ring-2 focus:ring-emerald-400" value={formData.checkOutDate} onChange={e => handleDateChange('checkOutDate', e.target.value)} /></div>
                             </div>
-                            <div className="flex justify-between items-center px-1"><span className="text-xs text-slate-500 font-medium">เช็คเอาท์:</span><span className="text-sm font-black text-slate-700 bg-slate-200 px-2 py-0.5 rounded">{formData.checkOutDate}</span></div>
+                            <div className="flex justify-between items-center px-1"><span className="text-xs text-slate-500 font-medium">จำนวนคืน:</span><span className="text-sm font-black text-slate-700 bg-slate-200 px-2 py-0.5 rounded">{formData.nights} คืน</span></div>
                             <div className="pt-4 border-t border-slate-200">
                                 <p className="text-xs font-bold text-slate-500 mb-2">จองเพิ่ม (Multi-room)</p>
                                 <div className="flex flex-wrap gap-2">
@@ -3612,11 +3638,11 @@ export default function App() {
                         <h3 className="text-sm font-bold text-slate-600 mb-4 flex items-center gap-2 uppercase tracking-wide relative z-10"><User size={16} className="text-emerald-500"/> ข้อมูลลูกค้า</h3>
                         <div className="space-y-3 relative z-10">
                             <div><label className="block text-xs font-bold text-slate-400 mb-1">ชื่อ-สกุล <span className="text-red-500">*</span></label><input list="guestList" type="text" className="w-full p-2.5 bg-slate-50 border-0 rounded-xl text-sm font-medium focus:bg-white focus:ring-2 focus:ring-emerald-400 transition-all" value={formData.guestName} onChange={handleGuestNameChange} placeholder="พิมพ์เพื่อค้นหาลูกค้าเก่า..." /><datalist id="guestList">{guestDirectory.map((g, i) => <option key={i} value={g.name}>{g.phone}</option>)}</datalist></div>
-                            <div className="grid grid-cols-2 gap-3">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                 <div><label className="block text-xs font-bold text-slate-400 mb-1">เบอร์โทรศัพท์ <span className="text-red-500">*</span></label><input type="tel" className="w-full p-2.5 bg-slate-50 border-0 rounded-xl text-sm font-medium focus:bg-white focus:ring-2 focus:ring-emerald-400 transition-all" value={formData.phone} onChange={e => setFormData({...formData, phone: e.target.value})} /></div>
                                 <div><label className="block text-xs font-bold text-emerald-500 mb-1">LINE ID / ชื่อไลน์</label><input type="text" className="w-full p-2.5 bg-emerald-50/50 border-0 rounded-xl text-sm font-medium focus:bg-white focus:ring-2 focus:ring-emerald-400 transition-all" value={formData.lineId} onChange={e => setFormData({...formData, lineId: e.target.value})} placeholder="@ หรือ ชื่อ" /></div>
                             </div>
-                            <div className="grid grid-cols-2 gap-3 pt-2">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
                                 <div><label className="block text-xs font-bold text-slate-400 mb-1">ทะเบียนรถ</label><input type="text" placeholder="เช่น กก 1234" className="w-full p-2.5 bg-slate-50 border-0 rounded-xl text-sm font-medium focus:bg-white focus:ring-2 focus:ring-emerald-400" value={formData.licensePlate} onChange={e => setFormData({...formData, licensePlate: e.target.value})} /></div>
                                 <div><label className="block text-xs font-bold text-slate-400 mb-1">เลขบัตร ปชช.</label><input type="text" placeholder="13 หลัก" className="w-full p-2.5 bg-slate-50 border-0 rounded-xl text-sm font-medium focus:bg-white focus:ring-2 focus:ring-emerald-400" value={formData.idCard} onChange={e => setFormData({...formData, idCard: e.target.value})} /></div>
                             </div>
@@ -3648,7 +3674,7 @@ export default function App() {
                     </div>
                 </div>
             </div>
-            <div className="flex gap-3 pt-4 border-t border-slate-100">
+            <div className="flex flex-wrap gap-3 pt-4 border-t border-slate-100">
                 {formData.id && (
                     <>
                         <button onClick={handleDeleteBooking} className="px-5 py-3 bg-red-50 text-red-500 rounded-xl font-bold hover:bg-red-100 flex items-center gap-2 transition-colors"><Trash2 size={18}/></button>
@@ -3657,9 +3683,10 @@ export default function App() {
                         )}
                     </>
                 )}
-                <button onClick={handleBookingSave} className={`py-3 bg-slate-800 text-white rounded-xl font-bold hover:bg-slate-900 flex justify-center items-center gap-2 shadow-lg shadow-slate-300 transition-all transform active:scale-95 ${formData.id ? 'px-8' : 'w-full'}`}><Save size={18}/> {formData.id ? 'บันทึกการแก้ไข' : 'ยืนยันการจอง'}</button>
+                {bookingSaveError && <p role="alert" className="w-full rounded-xl bg-red-50 p-3 text-sm text-red-600">{bookingSaveError}</p>}
+                <button disabled={isBookingSaving || !bookingsReady} onClick={handleBookingSave} className={`py-3 bg-slate-800 text-white rounded-xl font-bold hover:bg-slate-900 flex justify-center items-center gap-2 shadow-lg shadow-slate-300 transition-all transform active:scale-95 ${formData.id ? 'px-8' : 'w-full'}`}><Save size={18}/> {isBookingSaving ? 'กำลังบันทึก…' : formData.id ? 'บันทึกการแก้ไข' : 'ยืนยันการจอง'}</button>
             </div>
-        </div>
+        </fieldset>
       </Modal>
 
       <Modal isOpen={isCheckInModalOpen} onClose={() => setIsCheckInModalOpen(false)} title={`จัดการห้องพัก (${formData.docNo})`} maxWidth="max-w-4xl"
