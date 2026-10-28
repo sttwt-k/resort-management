@@ -1,3 +1,9 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+/* Native iOS date controls must shrink inside the booking grid. */
+.booking-form div { min-width: 0; }
+.booking-form input { min-width: 0; max-width: 100%; box-sizing: border-box; }
+.booking-form input[type="date"] { appearance: none; display: block; min-height: 44px; }
+.booking-form input::-webkit-date-and-time-value { text-align: left; }
+.booking-form button:disabled { opacity: .6; cursor: wait; }
