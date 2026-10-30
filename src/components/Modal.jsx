@@ -28,7 +28,7 @@ export const ConfirmModal = ({ dialog, onClose }) => {
   const {
     title, message,
     confirmLabel = 'ยืนยัน',
-    cancelLabel = 'ยกเลิก',
+    cancelLabel = 'กลับไปก่อน',
     variant = 'default',
     onConfirm,
     onCancel,

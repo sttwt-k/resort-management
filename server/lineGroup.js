@@ -38,9 +38,10 @@ export function buildGroupSummary({ rooms, bookings, date, staffUrl }) {
     .sort((a, b) => a.localeCompare(b, 'th'));
   const [year, month, day] = date.split('-');
   const message = [
-    `จันผารีสอร์ท · ห้องพร้อมรับ ${day}/${month}/${year}`,
+    `จันผารีสอร์ท 🌿 อัปเดตห้องพร้อมรับ ${day}/${month}/${year}`,
     `พร้อมรับ ${ready.length} จาก ${rooms.length} ห้อง`,
-    names.length ? names.join(', ') : 'ไม่มีห้องพร้อมรับ',
+    names.length ? names.join(', ') : 'ตอนนี้ยังไม่มีห้องพร้อมรับลูกค้า',
+    'ตรวจสอบสถานะล่าสุดในแอปก่อนรับลูกค้านะครับ',
     `เปิดแอปพนักงาน: ${staffUrl}`,
   ].join('\n');
   if (message.length > 5000) throw new Error('LINE report is too long');
