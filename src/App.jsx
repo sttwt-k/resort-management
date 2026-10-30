@@ -696,8 +696,8 @@ export default function App() {
           startStaffCheckIn(selectedStaffRooms);
       } else if (actionType === 'checkout') {
           showConfirm({
-              title: 'ยืนยันคืนห้อง',
-              message: `คืนห้องจำนวน ${selectedStaffRooms.length} ห้อง?`,
+              title: 'รับคืนห้องพัก',
+              message: `ต้องการรับคืนห้องพักที่เลือก ${selectedStaffRooms.length} ห้องใช่ไหมครับ?\nกรุณาตรวจสอบการคืนกุญแจและเงินมัดจำก่อนดำเนินการ`,
               confirmLabel: 'คืนห้อง',
               variant: 'default',
               onConfirm: async () => {
@@ -838,16 +838,16 @@ export default function App() {
             const totalCost = (booking.roomPrice * nights) + (booking.extraBedPrice || 0);
             const totalPaid = (booking.totalPaid || 0) + (booking.deposit || 0);
             const remaining = totalCost - totalPaid;
-            const statusText = remaining > 0 ? `(ค้าง ${remaining.toLocaleString()})` : '(ครบ)';
+            const statusText = remaining > 0 ? `(รอชำระ ${remaining.toLocaleString()} บาท)` : '(ชำระครบแล้ว)';
             occupiedList.push(`${r.name} (${booking.guestName}) ${statusText}`);
         }
         else if (status === 'booked') {
-            bookedList.push(`${r.name} (${booking.guestName}) - มัดจำ ${Number(booking.deposit || 0).toLocaleString()}`);
+            bookedList.push(`${r.name} (${booking.guestName}) · มัดจำ ${Number(booking.deposit || 0).toLocaleString()} บาท`);
         }
         else if (status === 'available' && r.cleaningStatus !== 'dirty') availableList.push(r.name);
         else unavailableList.push(r.name);
     });
-    const message = `สรุปห้องพัก "จันผารีสอร์ท" \nวันที่: ${formatThaiDate(selectedDate, 'full')}\n--------------------\n✅ ว่างพร้อมรับ (${availableList.length}):\n${availableList.length > 0 ? availableList.join(', ') : '-'}\n\n🏠 เข้าพัก (${occupiedList.length}):\n${occupiedList.length > 0 ? occupiedList.join('\n') : '-'}\n\n📒 จองไว้ (${bookedList.length}):\n${bookedList.length > 0 ? bookedList.join('\n') : '-'}\n\n🧹 ยังไม่พร้อม (${unavailableList.length}):\n${unavailableList.length > 0 ? unavailableList.join(', ') : '-'}\n--------------------`;
+    const message = `จันผารีสอร์ท 🌿 สรุปห้องพัก\nประจำวันที่ ${formatThaiDate(selectedDate, 'full')}\n\n✅ พร้อมรับลูกค้า · ${availableList.length} ห้อง\n${availableList.length ? availableList.join(', ') : 'ยังไม่มีห้องพร้อมรับลูกค้า'}\n\n🏡 กำลังเข้าพัก · ${occupiedList.length} ห้อง\n${occupiedList.length ? occupiedList.join('\n') : 'ไม่มีรายการเข้าพัก'}\n\n📒 จองล่วงหน้า · ${bookedList.length} ห้อง\n${bookedList.length ? bookedList.join('\n') : 'ไม่มีรายการจอง'}\n\n🧹 ยังไม่พร้อมรับลูกค้า · ${unavailableList.length} ห้อง\n${unavailableList.length ? unavailableList.join(', ') : 'ไม่มีห้องที่ต้องรอเตรียม'}\n\nตรวจสอบสถานะล่าสุดในแอปก่อนรับลูกค้านะครับ`;
     setLineMessage(message);
     setIsLineModalOpen(true);
   };
@@ -927,7 +927,7 @@ export default function App() {
   const handleDeleteRoom = (rid) => {
       showConfirm({
           title: 'ลบห้องพัก',
-          message: 'ยืนยันลบห้องนี้? ข้อมูลจะหายถาวร',
+          message: 'ต้องการลบห้องนี้ใช่ไหมครับ? เมื่อลบแล้วจะกู้คืนข้อมูลห้องไม่ได้ กรุณาตรวจสอบก่อนดำเนินการ',
           confirmLabel: 'ลบ',
           variant: 'danger',
           onConfirm: async () => {
@@ -1291,7 +1291,7 @@ export default function App() {
              title: 'คืนห้องก่อนกำหนด',
              message: `ลูกค้าคืนห้องก่อนกำหนด (${actualNights} คืน)\nต้องการปรับยอดค่าห้องเป็น ${newPrice.toLocaleString()} บาท หรือไม่?`,
              confirmLabel: 'ปรับยอดและเช็คเอาท์',
-             cancelLabel: 'เช็คเอาท์ราคาเดิม',
+             cancelLabel: 'กลับไปตรวจสอบ',
              variant: 'warning',
              onConfirm: () => doCheckout(actualNights, newPrice)
          });
@@ -1300,8 +1300,8 @@ export default function App() {
 
      const keyDep = Number(formData.keyDeposit);
      showConfirm({
-         title: 'ยืนยันเช็คเอาท์',
-         message: keyDep > 0 ? `คืนมัดจำกุญแจ ${keyDep.toLocaleString()} บาท แล้ว?\n\nยืนยันเช็คเอาท์?` : 'ยืนยันเช็คเอาท์?',
+         title: 'รับคืนห้องพัก',
+         message: keyDep > 0 ? `กรุณาคืนมัดจำกุญแจ ${keyDep.toLocaleString()} บาทให้ลูกค้าก่อนนะครับ\nเมื่อเรียบร้อยแล้ว กดเช็คเอาท์เพื่อบันทึกการคืนห้อง` : 'ลูกค้าคืนห้องเรียบร้อยแล้วใช่ไหมครับ? กดเช็คเอาท์เพื่อบันทึกการคืนห้อง',
          confirmLabel: 'เช็คเอาท์',
          variant: 'default',
          onConfirm: () => doCheckout()
@@ -1310,8 +1310,8 @@ export default function App() {
 
   const handleCheckoutSingle = (bid, keyDep) => {
      showConfirm({
-         title: 'ยืนยันเช็คเอาท์',
-         message: `ยืนยันเช็คเอาท์ห้องนี้?${keyDep > 0 ? `\n(อย่าลืมคืนมัดจำ ${keyDep} บาท)` : ''}`,
+         title: 'รับคืนห้องพัก',
+         message: `ลูกค้าคืนห้องนี้เรียบร้อยแล้วใช่ไหมครับ?${keyDep > 0 ? `\nกรุณาคืนมัดจำกุญแจ ${Number(keyDep).toLocaleString()} บาทก่อนกดเช็คเอาท์` : ''}`,
          confirmLabel: 'เช็คเอาท์',
          variant: 'default',
          onConfirm: async () => {
@@ -1331,7 +1331,7 @@ export default function App() {
   const handleCheckInSingle = (bid, roomName) => {
      showConfirm({
          title: 'ยืนยันเช็คอิน',
-         message: `เช็คอิน ${roomName}?`,
+         message: `พร้อมรับลูกค้าเข้าพัก ${roomName} แล้วใช่ไหมครับ?\nกดเช็คอินเพื่อบันทึกการเข้าพัก`,
          confirmLabel: 'เช็คอิน',
          variant: 'default',
          onConfirm: async () => {
@@ -1358,7 +1358,7 @@ export default function App() {
       // isRoomAvailable/checkRoomStatus already exclude status:'cancelled'.
       showConfirm({
           title: 'ยกเลิกการจอง',
-          message: 'ต้องการยกเลิกการจองนี้หรือไม่?\nห้องจะว่างทันที ข้อมูลจะถูกเก็บไว้เป็นประวัติการจอง (ไม่ถูกลบถาวร)',
+          message: 'ต้องการยกเลิกการจองนี้ใช่ไหมครับ?\nห้องจะเปิดให้จองใหม่ได้ และเราจะเก็บรายการเดิมไว้ในประวัติการจอง',
           confirmLabel: 'ยกเลิกการจอง',
           variant: 'danger',
           onConfirm: async () => {
@@ -2113,9 +2113,9 @@ export default function App() {
       <header className="bg-white/95 backdrop-blur-md text-emerald-900 shadow-sm sticky top-0 z-40 border-b border-white">
         <div className="w-full max-w-full px-3 md:px-6 py-3 flex justify-between items-center relative gap-2">
           <div className="flex items-center gap-2 flex-shrink-0">
-              <div className="bg-gradient-to-tr from-emerald-500 to-teal-400 text-white p-2 rounded-xl font-bold shadow-md shadow-emerald-200 text-sm flex-shrink-0">CR</div>
+              <img src="/chanpha-icon.svg" alt="โลโก้จันผา" width="44" height="44" className="h-11 w-11 rounded-xl flex-shrink-0" />
               <div className="min-w-0">
-                  <h1 className="text-base md:text-xl font-extrabold tracking-tight leading-tight">Chanpha Resort</h1>
+                  <h1 className="text-base md:text-xl font-extrabold tracking-tight leading-tight">จันผารีสอร์ท</h1>
                   <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider flex items-center gap-1">
                       {role === 'owner' ? 'Admin Mode' : 'Staff Mode'}
                       {useMockData && <span className="bg-red-100 text-red-600 px-1.5 py-0.5 rounded ml-1 animate-pulse">DEMO</span>}
@@ -3533,8 +3533,8 @@ export default function App() {
 
       <Modal isOpen={isBookingSummaryOpen} onClose={() => setIsBookingSummaryOpen(false)} title="บันทึกการจองสำเร็จ">
          <div className="space-y-4">
-            <div className="bg-emerald-50 p-6 rounded-2xl text-sm whitespace-pre-wrap font-mono text-emerald-800 border border-emerald-100 shadow-inner">{bookingSummaryText}</div>
-            <button onClick={() => copyToClipboard(bookingSummaryText)} className="w-full py-3 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700 flex justify-center items-center gap-2 shadow-lg shadow-emerald-200"><Copy size={18}/> คัดลอกส่งไลน์</button>
+            <div className="bg-emerald-50 p-6 rounded-2xl text-sm whitespace-pre-wrap leading-relaxed text-emerald-800 border border-emerald-100 shadow-inner">{bookingSummaryText}</div>
+            <button onClick={() => copyToClipboard(bookingSummaryText)} className="w-full py-3 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700 flex justify-center items-center gap-2 shadow-lg shadow-emerald-200"><Copy size={18}/> คัดลอกข้อความส่งให้ลูกค้า</button>
          </div>
       </Modal>
 
