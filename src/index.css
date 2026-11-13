@@ -7,3 +7,34 @@
 .booking-form input[type="date"] { appearance: none; display: block; min-height: 44px; }
 .booking-form input::-webkit-date-and-time-value { text-align: left; }
 .booking-form button:disabled { opacity: .6; cursor: wait; }
+
+.booking-timeline {
+  --timeline-room: 78px;
+  --timeline-day: clamp(68px, 6vw, 100px);
+}
+.timeline-calendar {
+  width: calc(var(--timeline-room) + var(--timeline-days) * var(--timeline-day));
+}
+.timeline-row {
+  display: grid;
+  grid-template-columns: var(--timeline-room) minmax(0, 1fr);
+}
+.timeline-room {
+  position: sticky;
+  left: 0;
+  z-index: 20;
+  background: white;
+  box-shadow: 1px 0 #e2e8f0;
+}
+.timeline-dates {
+  display: grid;
+  grid-template-columns: repeat(var(--timeline-days), var(--timeline-day));
+}
+.timeline-status[data-booking-status="booked"] { background: #ffead5; border-color: #f5b887; }
+.timeline-status[data-booking-status="occupied"] { background: #dff0d5; border-color: #9cca89; }
+.timeline-status[data-booking-status="checked-out"] { background: #edf0f3; border-color: #cbd5e1; }
+.timeline-status[data-booking-status="temporary"] { background: #e9e4fa; border-color: #c3b1ec; }
+
+@media (min-width: 768px) {
+  .booking-timeline { --timeline-room: 120px; }
+}
