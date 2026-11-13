@@ -43,7 +43,7 @@ async function main() {
     const staffWalkIn = {
       roomId: '4', status: 'occupied', guestName: 'Walk-in guest', phone: '0000000000',
       checkInDate: '2026-11-10', checkOutDate: '2026-11-12', paymentMethod: 'เงินสด',
-      docNo: 'BK2611-001', checkInDocNo: 'RC2611-001', keyDepositCollected: true,
+      docNo: 'BK-202611-001', checkInDocNo: 'RC-202611-001', keyDepositCollected: true,
     };
     await assert.rejects(commit([create('staff-forged-money', { ...staffWalkIn, totalPrice: 1 })], 'anonymous-staff'),
       error => error.name === 'BookingForbiddenError', 'staff cannot submit a custom total');
@@ -59,7 +59,7 @@ async function main() {
     await commit([create('staff-temp', {
       roomId: '5', status: 'temporary', guestName: 'Temporary guest',
       checkInDate: bangkokDate(new Date()), checkOutDate: bangkokDate(new Date(Date.now() + 3 * 3600000)), durationHours: 3,
-      paymentMethod: 'เงินสด', docNo: 'TM2611-001', keyDepositCollected: false,
+      paymentMethod: 'เงินสด', docNo: 'TM-202611-001', keyDepositCollected: false,
     })], 'anonymous-staff');
     assert.equal((await bookings.doc('staff-temp').get()).data().totalPrice, 500);
     const staffTemp = (await bookings.doc('staff-temp').get()).data();
@@ -74,12 +74,16 @@ async function main() {
       error => error.name === 'BookingForbiddenError', 'staff cannot submit a custom payment total');
     await assert.rejects(commit([update('reserved-for-staff', reserved, { status: 'occupied', paymentMethod: 'เงินสด', checkInTimeStr: '01:00' })], 'anonymous-staff'),
       error => error.name === 'BookingForbiddenError', 'staff cannot forge check-in time');
+    await assert.rejects(commit([update('reserved-for-staff', reserved, {
+      status: 'occupied', paymentMethod: 'เงินสด', checkInDocNo: 'RC-202611-02',
+    })], 'anonymous-staff'), error => error.name === 'BookingInputError', 'malformed receipt numbers are rejected');
     await commit([update('reserved-for-staff', reserved, {
-      status: 'occupied', keyDepositCollected: true, paymentMethod: 'เงินสด', checkInDocNo: 'RC2611-002',
+      status: 'occupied', keyDepositCollected: true, paymentMethod: 'เงินสด', checkInDocNo: 'RC-202611-002',
     })], 'anonymous-staff');
     const checkedIn = (await bookings.doc('reserved-for-staff').get()).data();
     assert.equal(checkedIn.totalPaid, 1100);
     assert.equal(checkedIn.keyDeposit, 100);
+    assert.equal(checkedIn.checkInDocNo, 'RC-202611-002');
     await assert.rejects(commit([update('reserved-for-staff', checkedIn, {
       status: 'checked-out', keyDepositReturned: true, checkOutTime: new Date('2020-01-01'),
     })], 'anonymous-staff'), error => error.name === 'BookingForbiddenError');
@@ -146,6 +150,7 @@ async function main() {
       method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ mutations: [create('api-create', {
         ...staffWalkIn, roomId: '7', checkInDate: '2026-10-02', checkOutDate: '2026-10-03',
+        docNo: 'BK2610-001', checkInDocNo: 'RC2610-001',
       })] }),
     }));
     assert.equal(apiResponse.status, 200, await apiResponse.text());

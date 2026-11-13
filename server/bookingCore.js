@@ -12,6 +12,9 @@ const STAFF_CHECKIN_FIELDS = new Set([
 ]);
 const STAFF_CHECKOUT_FIELDS = new Set(['status', 'keyDepositReturned']);
 const STAFF_PAYMENT_METHODS = new Set(['เงินสด', 'เงินโอน']);
+// The app generates PREFIX-YYYYMM-NNN; older clients used PREFIXYYMM-NNN.
+const RECEIPT_NUMBER = /^RC(?:-\d{6}-\d{3,}|\d{4}-\d{3})$/;
+const BOOKING_NUMBER = /^(BK|TM)(?:-\d{6}-\d{3,}|\d{4}-\d{3})$/;
 const bangkokParts = date => Object.fromEntries(new Intl.DateTimeFormat('en-GB', {
   timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit',
   hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
@@ -28,7 +31,7 @@ const validReceiptUrl = value => value == null || (typeof value === 'string' && 
   (value.startsWith('https://firebasestorage.googleapis.com/v0/b/') ||
     (process.env.FIRESTORE_EMULATOR_HOST && /^http:\/\/127\.0\.0\.1:9199\/v0\/b\//.test(value))));
 const validReceiptFields = value =>
-  (value.checkInDocNo === undefined || (typeof value.checkInDocNo === 'string' && /^RC\d{4}-\d{3}$/.test(value.checkInDocNo))) &&
+  (value.checkInDocNo === undefined || (typeof value.checkInDocNo === 'string' && RECEIPT_NUMBER.test(value.checkInDocNo))) &&
   (value.isReceiptRequested === undefined || typeof value.isReceiptRequested === 'boolean') &&
   validReceiptUrl(value.billPhotoUrl);
 
@@ -126,7 +129,7 @@ function staffCreate(input, room, uid) {
         input.checkInDate !== bangkokDate(now) || input.checkOutDate !== bangkokDate(scheduledOut)))) {
     throw new BookingInputError('Invalid room price or stay');
   }
-  if (typeof input.docNo !== 'string' || !/^(BK|TM)\d{4}-\d{3}$/.test(input.docNo) ||
+  if (typeof input.docNo !== 'string' || !BOOKING_NUMBER.test(input.docNo) ||
       (input.status === 'temporary' && !input.docNo.startsWith('TM')) ||
       (input.status === 'occupied' && !input.docNo.startsWith('BK')) ||
       !validReceiptFields(input)) {
