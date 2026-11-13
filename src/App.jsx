@@ -10,11 +10,12 @@ import { ref as storageRef, deleteObject } from 'firebase/storage';
 import { Modal, ConfirmModal } from './components/Modal';
 import { LoginScreen } from './components/LoginScreen';
 import { OfflineBanner } from './components/OfflineBanner';
+import { BookingTimeline } from './components/BookingTimeline';
 import {
   DEFAULT_ROOM_SEEDS, DEFAULT_EXPENSE_CATEGORIES, PAYMENT_METHODS, COLORS, TEMP_DURATIONS,
   getNowTimeStr, formatDate, addDays, calculateNights, calculateAge,
   generateSequentialDocNo, uploadBillPhoto, exportToCSV, generateBookingSummary,
-  formatThaiDate, THAI_MONTHS_SHORT, THAI_DAYS_SHORT,
+  formatThaiDate,
 } from './lib/utils';
 import { 
   Calendar, Users, Phone, Camera, CheckCircle, 
@@ -22,7 +23,7 @@ import {
   Save, X, Key, Wallet, Download, Edit, Layers, 
   Settings, Trash2, Lock, Copy, FileText, User, 
   Shield, LogIn, Clock, CreditCard, Coins, ArrowRight, AlertCircle, Search, Car, Menu,
-  MessageCircle, Send, LayoutList, ChevronRight, ChevronLeft, Smartphone, Gift, CheckSquare,
+  MessageCircle, Send, LayoutList, ChevronRight, Smartphone, Gift, CheckSquare,
   Receipt, Banknote, QrCode, Image as ImageIcon, Moon, Package, Minus
 } from 'lucide-react';
 import { 
@@ -50,8 +51,6 @@ if (!document.getElementById('custom-font-style')) {
     .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
     .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
 
-    .timeline-grid { display: grid; grid-template-columns: 80px repeat(14, 1fr); }
-    
     .checkbox-wrapper { transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
     .checkbox-wrapper.selected { transform: scale(1.1); border-color: #10b981; background-color: #10b981; box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3); }
   `;
@@ -159,7 +158,7 @@ export default function App() {
 
   const [guestSearchTerm, setGuestSearchTerm] = useState('');
   const [historyCustomer, setHistoryCustomer] = useState(null);
-  const [timelineStartDate, setTimelineStartDate] = useState(formatDate(new Date()));
+  const [timelineStartDate, setTimelineStartDate] = useState(todayInThailand);
 
   const [selectedStaffRooms, setSelectedStaffRooms] = useState([]);
   const [isStaffCheckInModalOpen, setIsStaffCheckInModalOpen] = useState(false);
@@ -2370,103 +2369,14 @@ export default function App() {
         )}
 
         {currentView === 'timeline' && (
-            <div className="space-y-6 animate-fade-in">
-                <div className="flex justify-between items-center bg-white p-4 rounded-2xl shadow-sm border border-slate-200">
-                    <h2 className="text-2xl font-black text-slate-800 flex items-center gap-3"><LayoutList className="text-emerald-500"/> ปฏิทินจองห้อง</h2>
-                    <div className="flex items-center gap-2">
-                        <button onClick={() => {const d = new Date(timelineStartDate); d.setDate(d.getDate() - 7); setTimelineStartDate(formatDate(d));}} className="p-2 hover:bg-slate-100 rounded-lg"><ChevronLeft size={24}/></button>
-                        <input type="date" value={timelineStartDate} onChange={(e) => setTimelineStartDate(e.target.value)} className="font-bold text-slate-700 bg-transparent outline-none" />
-                        <button onClick={() => {const d = new Date(timelineStartDate); d.setDate(d.getDate() + 7); setTimelineStartDate(formatDate(d));}} className="p-2 hover:bg-slate-100 rounded-lg"><ChevronRight size={24}/></button>
-                    </div>
-                </div>
-                <div className="flex flex-wrap gap-3 bg-white px-5 py-3 rounded-2xl shadow-sm border border-slate-200 text-xs font-bold">
-                    <span className="flex items-center gap-1.5"><span className="w-4 h-4 rounded bg-yellow-200 border border-yellow-300 inline-block"/><span className="text-slate-600">จอง (Booked)</span></span>
-                    <span className="flex items-center gap-1.5"><span className="w-4 h-4 rounded bg-blue-200 border border-blue-300 inline-block"/><span className="text-slate-600">กำลังพัก (Occupied)</span></span>
-                    <span className="flex items-center gap-1.5"><span className="w-4 h-4 rounded bg-slate-200 border border-slate-300 opacity-60 inline-block"/><span className="text-slate-600">คืนห้องแล้ว (Checked-out)</span></span>
-                </div>
-                <div className="bg-white rounded-[1.5rem] shadow-sm border border-slate-200 overflow-x-auto custom-scrollbar p-4">
-                    <div className="min-w-[1000px]">
-                        {/* Header row */}
-                        <div className="timeline-grid mb-0">
-                            <div className="font-bold text-slate-400 text-xs px-2 flex items-end pb-2">ห้อง</div>
-                            {[...Array(14)].map((_, i) => {
-                                const date = addDays(timelineStartDate, i);
-                                const d = new Date(date + 'T00:00:00');
-                                const isWeekend = d.getDay() === 0 || d.getDay() === 6;
-                                const isToday = date === formatDate(new Date());
-                                return (
-                                    <div key={i} className={`text-center border-l border-slate-300 py-1 ${isToday ? 'bg-emerald-50 rounded-t-lg' : ''}`}>
-                                        <div className={`text-[9px] font-bold ${isWeekend ? 'text-red-400' : 'text-slate-400'}`}>{THAI_DAYS_SHORT[d.getDay()]}</div>
-                                        <div className={`text-sm font-black ${isToday ? 'text-emerald-600' : isWeekend ? 'text-red-500' : 'text-slate-700'}`}>{d.getDate()}</div>
-                                        <div className={`text-[9px] font-bold ${isWeekend ? 'text-red-400' : 'text-slate-400'}`}>{THAI_MONTHS_SHORT[d.getMonth()]}</div>
-                                    </div>
-                                );
-                            })}
-                        </div>
-                        {/* Divider */}
-                        <div className="border-t-2 border-slate-400 mb-0"/>
-                        {/* Room rows */}
-                        <div className="">
-                            {rooms.map((room, rIdx) => (
-                                <div key={room.id} className={`timeline-grid items-center h-11 hover:bg-slate-50 transition-colors group ${rIdx < rooms.length - 1 ? 'border-b border-slate-200' : ''}`}>
-                                    <div className="font-bold text-slate-700 text-xs px-2 truncate">{room.name}</div>
-                                    {[...Array(14)].map((_, i) => {
-                                        const currentDate = addDays(timelineStartDate, i);
-                                        const isToday = currentDate === formatDate(new Date());
-                                        const { status, booking } = checkRoomStatus(room.id, currentDate, true);
-
-                                        // Also check if this day is the departure (checkOutDate) of a booking
-                                        const departureBooking = status === 'available'
-                                            ? bookings.find(b => b.roomId === room.id && b.status !== 'cancelled' && b.checkOutDate === currentDate)
-                                            : null;
-                                        const isDepartureOnly = !!departureBooking;
-
-                                        const cellBg = isToday ? 'bg-emerald-50/60' : '';
-
-                                        if (status === 'available' && !isDepartureOnly) {
-                                            return <div key={i} className={`h-full border-l border-slate-300 ${cellBg}`}/>;
-                                        }
-
-                                        const effectiveBooking = isDepartureOnly ? departureBooking : booking;
-                                        const effectiveStatus  = isDepartureOnly ? departureBooking.status : status;
-
-                                        const isArrival   = !isDepartureOnly && effectiveBooking.checkInDate === currentDate;
-                                        const isDeparture = isDepartureOnly; // checkOutDate day
-                                        // Show name on first full-width cell (day after arrival); fall back to arrival cell for 1-night stays
-                                        const isFirstMiddle = !isArrival && !isDeparture && currentDate === addDays(effectiveBooking.checkInDate, 1);
-                                        const bookingNights = calculateNights(effectiveBooking.checkInDate, effectiveBooking.checkOutDate);
-                                        const showGuestName = isFirstMiddle || (isArrival && bookingNights <= 1);
-
-                                        let bgClass = 'bg-yellow-300 border-yellow-400';
-                                        if (effectiveStatus === 'occupied')     bgClass = 'bg-blue-300 border-blue-400';
-                                        if (effectiveStatus === 'checked-out')  bgClass = 'bg-slate-200 border-slate-300 opacity-50';
-
-                                        // Bar spans: middle of arrival day → middle of departure day
-                                        let leftPct = '0%', widthPct = '100%';
-                                        let roundL = false, roundR = false;
-                                        if (isArrival)   { leftPct = '50%'; widthPct = '50%'; roundL = true; }
-                                        if (isDeparture) { leftPct = '0%';  widthPct = '50%'; roundR = true; }
-                                        const roundClass = `${roundL ? 'rounded-l-full' : ''} ${roundR ? 'rounded-r-full' : ''}`;
-
-                                        return (
-                                            <div key={i} className={`relative h-full border-l border-slate-300 ${cellBg}`}>
-                                                <div
-                                                    className={`absolute top-1/2 -translate-y-1/2 h-6 ${bgClass} border ${roundClass} flex items-center overflow-hidden cursor-pointer hover:opacity-80 transition-opacity`}
-                                                    style={{ left: leftPct, width: widthPct }}
-                                                    title={`${effectiveBooking.guestName} (${effectiveStatus})`}
-                                                    onClick={() => handleRoomClick(room, effectiveStatus, effectiveBooking, 'timeline')}
-                                                >
-                                                    {showGuestName && <span className="text-[9px] font-bold text-slate-800 whitespace-nowrap pl-2 overflow-hidden">{effectiveBooking.guestName}</span>}
-                                                </div>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                </div>
-            </div>
+            <BookingTimeline
+                rooms={rooms}
+                bookings={bookings}
+                startDate={timelineStartDate}
+                today={todayInThailand()}
+                onStartDateChange={setTimelineStartDate}
+                onBookingClick={(room, booking) => handleRoomClick(room, booking.status, booking, 'timeline')}
+            />
         )}
 
         {currentView === 'customers' && (
